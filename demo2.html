@@ -65,6 +65,25 @@ body { overflow: hidden; background: #000; font-family: -apple-system, BlinkMacS
 
 .sep { height: 1px; background: rgba(255,255,255,0.07); margin: 14px 0; }
 
+.toggle-group { display: flex; gap: 4px; margin-top: 4px; }
+.toggle-group button {
+    flex: 1;
+    padding: 5px 4px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 5px;
+    color: #888;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.toggle-group button:hover { background: rgba(255,255,255,0.10); color: #bbb; }
+.toggle-group button.active {
+    background: rgba(255,255,255,0.16);
+    border-color: rgba(255,255,255,0.25);
+    color: #fff;
+}
+
 #resetBtn {
     width: 100%;
     padding: 6px;
@@ -95,19 +114,20 @@ body { overflow: hidden; background: #000; font-family: -apple-system, BlinkMacS
 const DEFAULTS = {
     blurAmount:      0.00,
     frostAmount:     0.00,
-    refraction:      0.33,
-    chromAberration: 0.28,
+    refraction:      0.30,
+    chromAberration: 0.07,
     edgeHighlight:   0.19,
     specular:        0.00,
-    fresnel:         0.49,
+    fresnel:         1.00,
     distortion:      0.00,
-    cornerRadius:    22,
+    cornerRadius:    65,
     zRadius:         11,
     opacity:         1.00,
     saturation:      0.00,
     tintStrength:    0.00,
-    panelScale:      1.0,
-    shadowOpacity:   0.02,
+    panelScale:      1.57,
+    bevelMode:       0,       // 0=pill, 1=straight, 2=rounded
+    shadowOpacity:   0.11,
     shadowSpread:    3,
     shadowOffsetY:   1,
 };
@@ -200,6 +220,7 @@ uniform float u_alpha;
 uniform float u_sat;
 uniform float u_tint;
 uniform float u_zRadius;
+uniform float u_bevelMode;    // 0=pill, 1=straight, 2=rounded
 uniform float u_shadowAlpha;
 uniform float u_shadowSpread;
 uniform float u_shadowOffY;
@@ -213,14 +234,45 @@ float rrSDF(vec2 p, vec2 b, float r) {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
 }
 
-// Height field for pill cross-section: flat on top, circular ramp at edges
+// Height field for bevel cross-section
 // d = distance inside from edge (-sdf), zR = z-radius of the bevel
-// Returns height in [0, zR] and its derivative w.r.t. d
-float pillHeight(float d, float zR) {
-    if (d >= zR) return zR;  // flat plateau
+// Returns height in [0, zR]. Flat plateau beyond zR.
+//
+// Mode 0 - Pill (convex, half-circle C shape):
+//   h = sqrt(d*(2*zR-d)) — steep at edge, flattens into plateau
+//   Cross-section:    ___
+//                   /
+//                  |
+//               ___|
+//
+// Mode 1 - Straight (linear chamfer):
+//   h = d — constant 45° slope
+//   Cross-section:   ____
+//                   /
+//                  /
+//               __/
+//
+// Mode 2 - Rounded (quarter-circle on top, flush with background):
+//   h = zR - sqrt(zR²-d²) — gentle rise from background, curves to plateau
+//   Cross-section:     ___
+//                     /
+//                   /
+//               ___/
+//
+float bevelHeight(float d, float zR) {
+    if (d >= zR) return zR;
     if (d <= 0.0) return 0.0;
-    // Circular arc: h = sqrt(zR^2 - (zR - d)^2) = sqrt(d * (2*zR - d))
-    return sqrt(d * (2.0 * zR - d));
+    // Pill (convex arc)
+    if (u_bevelMode < 0.5) {
+        return sqrt(d * (2.0 * zR - d));
+    }
+    // Straight (linear)
+    if (u_bevelMode < 1.5) {
+        return d;
+    }
+    // Rounded (concave arc — flush with background, quarter-circle on top)
+    float t = d / zR;
+    return zR * (1.0 - sqrt(1.0 - t * t));
 }
 
 float hash(vec2 p) {
@@ -254,41 +306,79 @@ void main() {
     float inside = -sdf; // distance inside from edge (positive inside)
     float edge = smoothstep(maxD * 0.35, 0.0, inside);  // 1 at edge, 0 deep inside
 
-    // ---- Surface normal (pill/capsule cross-section) ----
-    // Compute height field from SDF: circular bevel within zRadius, flat beyond
+    // ---- Surface normal (top surface) ----
+    // Compute height field from SDF: bevel within zRadius, flat beyond
     float zR = u_zRadius;
     float e = 2.0;
-    // Sample SDF at neighboring points to get height gradient
-    float dC = -sdf;
+    // Sample SDF at neighboring points to get top-surface height gradient
+    float dC = inside;
     float dR = -rrSDF(v_localPx + vec2(e, 0.0), half_, r);
     float dL = -rrSDF(v_localPx - vec2(e, 0.0), half_, r);
     float dU = -rrSDF(v_localPx + vec2(0.0, e), half_, r);
     float dD = -rrSDF(v_localPx - vec2(0.0, e), half_, r);
-    // Heights via pill profile
-    float hC = pillHeight(dC, zR);
-    float hR = pillHeight(dR, zR);
-    float hL = pillHeight(dL, zR);
-    float hU = pillHeight(dU, zR);
-    float hD = pillHeight(dD, zR);
-    // Central differences for gradient of height
+    // Top surface heights via bevel profile
+    float hC = bevelHeight(dC, zR);
+    float hR = bevelHeight(dR, zR);
+    float hL = bevelHeight(dL, zR);
+    float hU = bevelHeight(dU, zR);
+    float hD = bevelHeight(dD, zR);
+    // Central differences for top surface height gradient
     vec2 hGrad = vec2(hR - hL, hU - hD) / (2.0 * e);
-    // Normal from height field: N = normalize(-dh/dx, -dh/dy, 1)
+    // Top surface normal: N = normalize(-dh/dx, -dh/dy, 1)
     vec3 N = normalize(vec3(-hGrad, 1.0));
 
     float depth = smoothstep(0.0, zR, inside); // 0 at edge, 1 on flat plateau
 
-    // ---- Refraction offset (lensing) ----
-    vec2 refr = N.xy * u_refract * 0.03;
-    // Lensing: subtle convex-lens shift toward center on plateau
+    // ---- Dual-surface refraction (physically-based) ----
+    // Real glass has TWO refracting interfaces:
+    //   1. Bottom (entry): light goes from air into glass, bends toward normal
+    //   2. Top (exit): light goes from glass into air, bends away from normal
+    //
+    // For a biconvex lens (pill/straight), both surfaces curve the same way
+    // and both deflect light toward center — effects are ADDITIVE.
+    // For plano-convex (rounded), the bottom is flat — only top refracts.
+    //
+    // Using thin-lens approximation:
+    //   deflection per surface ≈ (1 - 1/n) * surface_tilt
+    //   total = (1 - 1/n) * (tilt_top + tilt_bottom)
+
+    float ior = 1.5;
+    float refrPow = 1.0 - 1.0 / ior;  // ≈ 0.333
+
+    // Bottom surface factor: 1.0 for symmetric shapes, 0.0 for flat bottom
+    float botSurf = (u_bevelMode < 1.5) ? 1.0 : 0.0;
+
+    // Glass thickness (pill/straight = 2× height, rounded = 1× height)
+    float thickness = hC * (1.0 + botSurf);
+    float thickNorm = thickness / max(zR * (1.0 + botSurf), 1.0);
+
+    // Top surface (exit) refraction: ray bends based on top gradient
+    vec2 exitRefr = -hGrad * refrPow;
+
+    // Bottom surface (entry) refraction: for symmetric shapes, bottom has
+    // same curvature as top → same gradient contribution. For flat bottom = 0.
+    vec2 entryRefr = -hGrad * refrPow * botSurf;
+
+    // Internal ray offset: the entry-refracted ray travels at an angle
+    // through the glass thickness, adding lateral displacement
+    vec2 throughRefr = entryRefr * thickNorm * 0.5;
+
+    // Total physically-based refraction offset
+    vec2 refr = (exitRefr + entryRefr + throughRefr) * u_refract * 0.03;
+
+    // Convex-lens center magnification (on the flat plateau)
     vec2 centerDir = -v_localPx / max(maxD, 1.0);
-    refr += centerDir * u_refract * 0.004 * depth;
+    refr += centerDir * u_refract * 0.004 * depth * (1.0 + botSurf * 0.5);
 
     // ---- Micro-distortion noise ----
     vec2 ns = v_localPx * 0.08;
     vec2 micro = (vec2(hash(ns), hash(ns + vec2(37.0))) - 0.5) * u_distort * 0.004;
 
-    // ---- Chromatic aberration ----
-    float caS = u_chroma * 0.018 * (edge * 0.7 + 0.3);
+    // ---- Chromatic aberration (dispersion at both interfaces) ----
+    // Each interface disperses light (different IOR per wavelength).
+    // Two interfaces = stronger chromatic separation for symmetric shapes.
+    float surfaceCount = 1.0 + botSurf; // 2 for pill/straight, 1 for rounded
+    float caS = u_chroma * 0.018 * (edge * 0.7 + 0.3) * surfaceCount;
     vec2 caD = N.xy * caS;
     vec2 base = v_screenUV + refr + micro;
 
@@ -413,7 +503,7 @@ const glassU = uloc(glassP, [
     'u_bgTex','u_blurTex','u_center','u_size','u_radius','u_res','u_pad',
     'u_frost','u_refract','u_chroma','u_edgeHL','u_spec',
     'u_fresnel','u_distort','u_alpha','u_sat','u_tint',
-    'u_zRadius','u_shadowAlpha','u_shadowSpread','u_shadowOffY'
+    'u_zRadius','u_bevelMode','u_shadowAlpha','u_shadowSpread','u_shadowOffY'
 ]);
 
 // Geometry
@@ -623,6 +713,33 @@ ctrlDefs.forEach(([key, label, min, max, step]) => {
     sliders[key] = { inp, valEl, prec };
 });
 
+// Bevel mode toggle
+const bevelModes = ['Pill', 'Straight', 'Rounded'];
+const bevelDiv = document.createElement('div');
+bevelDiv.className = 'ctrl';
+bevelDiv.innerHTML = `<label><span>Bevel Shape</span></label><div class="toggle-group" id="bevelToggle"></div>`;
+// Insert after the Z Radius slider (find it in the controls list)
+const zRadiusCtrl = ctrlEl.children[9]; // zRadius is index 9 in ctrlDefs
+if (zRadiusCtrl && zRadiusCtrl.nextSibling) {
+    ctrlEl.insertBefore(bevelDiv, zRadiusCtrl.nextSibling);
+} else {
+    ctrlEl.appendChild(bevelDiv);
+}
+const bevelToggle = document.getElementById('bevelToggle');
+const bevelBtns = [];
+bevelModes.forEach((label, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    if (i === params.bevelMode) btn.classList.add('active');
+    btn.addEventListener('click', () => {
+        params.bevelMode = i;
+        bevelBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    });
+    bevelToggle.appendChild(btn);
+    bevelBtns.push(btn);
+});
+
 document.getElementById('resetBtn').addEventListener('click', () => {
     Object.assign(params, DEFAULTS);
     for (const [key] of ctrlDefs) {
@@ -630,6 +747,10 @@ document.getElementById('resetBtn').addEventListener('click', () => {
         s.inp.value = params[key];
         s.valEl.textContent = params[key].toFixed(s.prec);
     }
+    // Reset bevel toggle
+    bevelBtns.forEach((b, i) => {
+        b.classList.toggle('active', i === params.bevelMode);
+    });
 });
 
 // ====================================================================
@@ -720,6 +841,7 @@ function render() {
     gl.uniform1f(glassU.u_sat,     params.saturation);
     gl.uniform1f(glassU.u_tint,    params.tintStrength);
     gl.uniform1f(glassU.u_zRadius, params.zRadius * dpr);
+    gl.uniform1f(glassU.u_bevelMode, params.bevelMode);
     gl.uniform1f(glassU.u_shadowAlpha,  params.shadowOpacity);
     gl.uniform1f(glassU.u_shadowSpread, params.shadowSpread * dpr);
     gl.uniform1f(glassU.u_shadowOffY,   params.shadowOffsetY * dpr);
