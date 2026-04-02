@@ -201,7 +201,6 @@ uniform float u_alpha;
 uniform float u_sat;
 uniform float u_tint;
 uniform float u_zRadius;
-float u_bevelMode = 0.0;
 uniform float u_brightness;
 uniform float u_shadowAlpha;
 uniform float u_shadowSpread;
@@ -216,45 +215,14 @@ float rrSDF(vec2 p, vec2 b, float r) {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
 }
 
-// Height field for bevel cross-section
-// d = distance inside from edge (-sdf), zR = z-radius of the bevel
-// Returns height in [0, zR]. Flat plateau beyond zR.
-//
-// Mode 0 - Pill (convex, half-circle C shape):
-//   h = sqrt(d*(2*zR-d)) — steep at edge, flattens into plateau
-//   Cross-section:    ___
-//                   /
-//                  |
-//               ___|
-//
-// Mode 1 - Straight (linear chamfer):
-//   h = d — constant 45° slope
-//   Cross-section:   ____
-//                   /
-//                  /
-//               __/
-//
-// Mode 2 - Rounded (quarter-circle on top, flush with background):
-//   h = zR - sqrt(zR²-d²) — gentle rise from background, curves to plateau
-//   Cross-section:     ___
-//                     /
-//                   /
-//               ___/
-//
+// Pill (biconvex) bevel height field.
+// Cross-section is a half-circle (C shape): steep at edge, flat plateau inside.
+// d = distance inside from edge (-sdf), zR = z-radius of the bevel.
+// Returns height in [0, zR].
 float bevelHeight(float d, float zR) {
     if (d >= zR) return zR;
     if (d <= 0.0) return 0.0;
-    // Pill (convex arc)
-    if (u_bevelMode < 0.5) {
-        return sqrt(d * (2.0 * zR - d));
-    }
-    // Straight (linear)
-    if (u_bevelMode < 1.5) {
-        return d;
-    }
-    // Rounded (concave arc — flush with background, quarter-circle on top)
-    float t = d / zR;
-    return zR * (1.0 - sqrt(1.0 - t * t));
+    return sqrt(d * (2.0 * zR - d));
 }
 
 float hash(vec2 p) {
@@ -311,57 +279,50 @@ void main() {
 
     float depth = smoothstep(0.0, zR, inside); // 0 at edge, 1 on flat plateau
 
-    // ---- Dual-surface refraction (physically-based) ----
-    // Real glass has TWO refracting interfaces:
-    //   1. Bottom (entry): light goes from air into glass, bends toward normal
-    //   2. Top (exit): light goes from glass into air, bends away from normal
+    // ---- Dual-surface refraction (biconvex pill) ----
+    // Both top and bottom surfaces are identical curved pill profiles.
+    // Light refracts at entry (air→glass) and exit (glass→air).
+    // Both surfaces deflect light toward center — effects are additive.
     //
-    // For a biconvex lens (pill/straight), both surfaces curve the same way
-    // and both deflect light toward center — effects are ADDITIVE.
-    // For plano-convex (rounded), the bottom is flat — only top refracts.
-    //
-    // Using thin-lens approximation:
-    //   deflection per surface ≈ (1 - 1/n) * surface_tilt
-    //   total = (1 - 1/n) * (tilt_top + tilt_bottom)
+    // COORDINATE FIX: hGrad is in v_localPx space (+x right, +y DOWN).
+    // v_screenUV is in GL space (+x right, +y UP). When converting pixel
+    // offsets to UV offsets, the Y axis must be flipped.
+    vec2 pxToUV = vec2(1.0, -1.0) / u_res;
 
     float ior = 1.5;
     float refrPow = 1.0 - 1.0 / ior;  // ≈ 0.333
 
-    // Bottom surface factor: 1.0 for symmetric shapes, 0.0 for flat bottom
-    float botSurf = (u_bevelMode < 1.5) ? 1.0 : 0.0;
+    // Glass thickness = 2× height (symmetric top + bottom)
+    float thickness = hC * 2.0;
+    float thickNorm = thickness / max(zR * 2.0, 1.0);
 
-    // Glass thickness (pill/straight = 2× height, rounded = 1× height)
-    float thickness = hC * (1.0 + botSurf);
-    float thickNorm = thickness / max(zR * (1.0 + botSurf), 1.0);
-
-    // Top surface (exit) refraction: ray bends based on top gradient
-    vec2 exitRefr = -hGrad * refrPow;
-
-    // Bottom surface (entry) refraction: for symmetric shapes, bottom has
-    // same curvature as top → same gradient contribution. For flat bottom = 0.
-    vec2 entryRefr = -hGrad * refrPow * botSurf;
-
-    // Internal ray offset: the entry-refracted ray travels at an angle
-    // through the glass thickness, adding lateral displacement
+    // hGrad points toward center (increasing height) in localPx space.
+    // A convex lens bends light inward, so we sample from where the ray
+    // originated: toward center. Use +hGrad (pxToUV flips Y for screenUV).
+    vec2 exitRefr = hGrad * refrPow;
+    vec2 entryRefr = hGrad * refrPow;
     vec2 throughRefr = entryRefr * thickNorm * 0.5;
 
-    // Total physically-based refraction offset
-    vec2 refr = (exitRefr + entryRefr + throughRefr) * u_refract * 0.03;
+    // Total refraction in pixels, then convert to screenUV
+    vec2 refrPx = (exitRefr + entryRefr + throughRefr) * u_refract * 30.0;
 
     // Convex-lens center magnification (on the flat plateau)
-    vec2 centerDir = -v_localPx / max(maxD, 1.0);
-    refr += centerDir * u_refract * 0.004 * depth * (1.0 + botSurf * 0.5);
+    // centerDir points toward center in localPx space
+    vec2 centerDir = -v_localPx / max(half_, vec2(1.0));
+    refrPx += centerDir * u_refract * 4.0 * depth;
+
+    vec2 refr = refrPx * pxToUV;
 
     // ---- Micro-distortion noise ----
+    // Noise is random so sign doesn't matter, only magnitude per axis
     vec2 ns = v_localPx * 0.08;
-    vec2 micro = (vec2(hash(ns), hash(ns + vec2(37.0))) - 0.5) * u_distort * 0.004;
+    vec2 absPxToUV = vec2(1.0) / u_res;
+    vec2 micro = (vec2(hash(ns), hash(ns + vec2(37.0))) - 0.5) * u_distort * 4.0 * absPxToUV;
 
     // ---- Chromatic aberration (dispersion at both interfaces) ----
-    // Each interface disperses light (different IOR per wavelength).
-    // Two interfaces = stronger chromatic separation for symmetric shapes.
-    float surfaceCount = 1.0 + botSurf; // 2 for pill/straight, 1 for rounded
-    float caS = u_chroma * 0.018 * (edge * 0.7 + 0.3) * surfaceCount;
-    vec2 caD = N.xy * caS;
+    // N.xy is in localPx space, same Y-flip applies
+    float caS = u_chroma * 18.0 * (edge * 0.7 + 0.3) * 2.0;
+    vec2 caD = N.xy * caS * pxToUV;
     vec2 base = v_screenUV + refr + micro;
 
     // Sample R/G/B at offset UVs for chromatic separation
