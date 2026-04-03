@@ -1,0 +1,22 @@
+/**
+ * liquid-glass — A liquid glass effect library for the web.
+ *
+ * Apply realistic glass refraction, blur, chromatic aberration, and
+ * lighting to any HTML element using WebGL shaders.
+ *
+ * @example
+ *   import { LiquidGlass } from 'liquid-glass';
+ *
+ *   const instance = LiquidGlass.init({
+ *       root: document.querySelector('#my-root'),
+ *       glassElements: document.querySelectorAll('.glass'),
+ *   });
+ *
+ *   // Later:
+ *   instance.destroy();
+ *
+ * @module liquid-glass
+ */
+
+export { LiquidGlass } from './LiquidGlass.js';
+export { DEFAULTS } from './defaults.js';
