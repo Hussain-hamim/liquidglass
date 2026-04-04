@@ -1,14 +1,10 @@
 /**
  * GlassRenderer — WebGL rendering pipeline for the liquid glass effect.
  *
- * Manages a single offscreen WebGL canvas, shader programs, FBOs for
- * blur passes, and exposes methods to upload a background texture,
- * blur it, and render individual glass panels.
- *
- * The offscreen canvas is sized to match the root element so that all
- * glass panels can be rendered at their correct screen positions.
- * After rendering, the relevant region is copied to each glass
- * element's child canvas via drawImage.
+ * Manages a single offscreen WebGL canvas, shader programs, and a pool
+ * of local-sized FBOs for blur passes. Each panel render crops just the
+ * padded region behind that panel, uploads only that region, and shades
+ * the glass effect into the matching per-element canvas.
  */
 
 import { VS_QUAD, FS_BLIT, FS_BLUR, VS_GLASS, FS_GLASS } from './shaders.js';
@@ -22,11 +18,19 @@ interface FBO {
 	h: number;
 }
 
+interface FBOSet {
+	bg: FBO;
+	blurA: FBO;
+	blurB: FBO;
+}
+
 type UniformMap = Record<string, WebGLUniformLocation | null>;
 
 export class GlassRenderer {
 	readonly canvas: HTMLCanvasElement;
 	readonly gl: WebGLRenderingContext;
+	private readonly cropCanvas: HTMLCanvasElement;
+	private readonly cropCtx: CanvasRenderingContext2D;
 
 	private blitP!: WebGLProgram;
 	private blitU!: UniformMap;
@@ -38,9 +42,8 @@ export class GlassRenderer {
 	private quadBuf!: WebGLBuffer;
 	private panelBuf!: WebGLBuffer;
 
-	private bgFBO: FBO | null = null;
-	private blurA: FBO | null = null;
-	private blurB: FBO | null = null;
+	private readonly fboCache = new Map<string, FBOSet>();
+	private activeFBOs: FBOSet | null = null;
 
 	private bgTex: WebGLTexture | null = null;
 
@@ -56,6 +59,8 @@ export class GlassRenderer {
 		this.canvas = document.createElement('canvas');
 		this.canvas.style.display = 'none';
 		document.body.appendChild(this.canvas);
+		this.cropCanvas = document.createElement('canvas');
+		this.cropCtx = this.cropCanvas.getContext('2d')!;
 
 		const gl = this.canvas.getContext('webgl', {
 			alpha: true,
@@ -82,8 +87,12 @@ export class GlassRenderer {
 			this.contextLost = false;
 			this._initPrograms();
 			this._initBuffers();
+			for (const fboSet of this.fboCache.values()) {
+				this._freeFBOSet(fboSet);
+			}
+			this.fboCache.clear();
+			this.activeFBOs = null;
 			this.bgTex = null;
-			this._initFBOs(this.width, this.height);
 		};
 		this.canvas.addEventListener('webglcontextlost', this._onContextLost);
 		this.canvas.addEventListener('webglcontextrestored', this._onContextRestored);
@@ -129,35 +138,46 @@ export class GlassRenderer {
 	resize(width: number, height: number): void {
 		this.width = width;
 		this.height = height;
-		this.canvas.width = width;
-		this.canvas.height = height;
-		this._initFBOs(width, height);
 	}
 
 	// ────────────────────────────────────────────
 	// Background upload
 	// ────────────────────────────────────────────
 
-	uploadAndBlur(sourceCanvas: HTMLCanvasElement, blurAmount: number): void {
+	uploadAndBlur(
+		sourceCanvas: HTMLCanvasElement,
+		sourceX: number,
+		sourceY: number,
+		width: number,
+		height: number,
+		blurAmount: number,
+	): void {
 		if (this.contextLost) return;
 		const gl = this.gl;
+		this._setActiveSize(width, height);
 		const W = this.width;
 		const H = this.height;
+		const fboSet = this.activeFBOs!;
+
+		this.cropCanvas.width = W;
+		this.cropCanvas.height = H;
+		this.cropCtx.clearRect(0, 0, W, H);
+		this.cropCtx.drawImage(sourceCanvas, -sourceX, -sourceY);
 
 		if (!this.bgTex) {
 			this.bgTex = gl.createTexture();
 		}
 		gl.bindTexture(gl.TEXTURE_2D, this.bgTex);
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true as unknown as number);
-		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.cropCanvas);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false as unknown as number);
 
-		// Blit source → bgFBO (full resolution)
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.bgFBO!.fbo);
+		// Blit source → bgFBO (local padded region)
+		gl.bindFramebuffer(gl.FRAMEBUFFER, fboSet.bg.fbo);
 		gl.viewport(0, 0, W, H);
 		gl.useProgram(this.blitP);
 		gl.activeTexture(gl.TEXTURE0);
@@ -168,11 +188,11 @@ export class GlassRenderer {
 		this._drawQuad(this.blitP, this.quadBuf);
 
 		// Copy bgFBO → blurA
-		const bw = this.blurA!.w;
-		const bh = this.blurA!.h;
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA!.fbo);
+		const bw = fboSet.blurA.w;
+		const bh = fboSet.blurA.h;
+		gl.bindFramebuffer(gl.FRAMEBUFFER, fboSet.blurA.fbo);
 		gl.viewport(0, 0, bw, bh);
-		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO!.tex);
+		gl.bindTexture(gl.TEXTURE_2D, fboSet.bg.tex);
 		gl.uniform2f(this.blitU.u_scale, 1, 1);
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
@@ -183,14 +203,14 @@ export class GlassRenderer {
 			gl.useProgram(this.blurP);
 			gl.uniform1i(this.blurU.u_tex, 0);
 			for (let i = 0; i < BLUR_ITERATIONS; i++) {
-				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurB!.fbo);
+				gl.bindFramebuffer(gl.FRAMEBUFFER, fboSet.blurB.fbo);
 				gl.viewport(0, 0, bw, bh);
-				gl.bindTexture(gl.TEXTURE_2D, this.blurA!.tex);
+				gl.bindTexture(gl.TEXTURE_2D, fboSet.blurA.tex);
 				gl.uniform2f(this.blurU.u_dir, spread / bw, 0);
 				this._drawQuad(this.blurP, this.quadBuf);
 
-				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA!.fbo);
-				gl.bindTexture(gl.TEXTURE_2D, this.blurB!.tex);
+				gl.bindFramebuffer(gl.FRAMEBUFFER, fboSet.blurA.fbo);
+				gl.bindTexture(gl.TEXTURE_2D, fboSet.blurB.tex);
 				gl.uniform2f(this.blurU.u_dir, 0, spread / bh);
 				this._drawQuad(this.blurP, this.quadBuf);
 			}
@@ -203,8 +223,6 @@ export class GlassRenderer {
 
 	renderGlassPanel(
 		config: GlassConfig,
-		centerX: number,
-		centerY: number,
 		width: number,
 		height: number,
 		dpr: number,
@@ -213,23 +231,24 @@ export class GlassRenderer {
 		const gl = this.gl;
 		const W = this.width;
 		const H = this.height;
+		const fboSet = this.activeFBOs!;
 
 		gl.enable(gl.BLEND);
 		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 		gl.useProgram(this.glassP);
 
 		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO!.tex);
+		gl.bindTexture(gl.TEXTURE_2D, fboSet.bg.tex);
 		gl.uniform1i(this.glassU.u_bgTex, 0);
 		gl.activeTexture(gl.TEXTURE1);
-		gl.bindTexture(gl.TEXTURE_2D, this.blurA!.tex);
+		gl.bindTexture(gl.TEXTURE_2D, fboSet.blurA.tex);
 		gl.uniform1i(this.glassU.u_blurTex, 1);
 
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-		gl.viewport(0, 0, W, H);
+		gl.viewport(0, this.canvas.height - H, W, H);
 		gl.uniform2f(this.glassU.u_res, W, H);
 
-		gl.uniform2f(this.glassU.u_center, centerX * dpr, centerY * dpr);
+		gl.uniform2f(this.glassU.u_center, W * 0.5, H * 0.5);
 		gl.uniform2f(this.glassU.u_size, width * dpr, height * dpr);
 
 		gl.uniform1f(this.glassU.u_radius, config.cornerRadius * dpr);
@@ -257,9 +276,12 @@ export class GlassRenderer {
 	clear(): void {
 		const gl = this.gl;
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-		gl.viewport(0, 0, this.width, this.height);
+		gl.viewport(0, this.canvas.height - this.height, this.width, this.height);
+		gl.enable(gl.SCISSOR_TEST);
+		gl.scissor(0, this.canvas.height - this.height, this.width, this.height);
 		gl.clearColor(0, 0, 0, 0);
 		gl.clear(gl.COLOR_BUFFER_BIT);
+		gl.disable(gl.SCISSOR_TEST);
 	}
 
 	destroy(): void {
@@ -267,9 +289,10 @@ export class GlassRenderer {
 		this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
 		if (!this.contextLost) {
 			const gl = this.gl;
-			this._freeFBO(this.bgFBO);
-			this._freeFBO(this.blurA);
-			this._freeFBO(this.blurB);
+			for (const fboSet of this.fboCache.values()) {
+				this._freeFBOSet(fboSet);
+			}
+			this.fboCache.clear();
 			if (this.bgTex) gl.deleteTexture(this.bgTex);
 			gl.deleteBuffer(this.quadBuf);
 			gl.deleteBuffer(this.panelBuf);
@@ -284,14 +307,26 @@ export class GlassRenderer {
 	// FBO management
 	// ────────────────────────────────────────────
 
-	private _initFBOs(w: number, h: number): void {
-		this._freeFBO(this.bgFBO);
-		this._freeFBO(this.blurA);
-		this._freeFBO(this.blurB);
+	private _setActiveSize(w: number, h: number): void {
+		this.width = w;
+		this.height = h;
 
-		this.bgFBO = this._makeFBO(w, h);
-		this.blurA = this._makeFBO(w, h);
-		this.blurB = this._makeFBO(w, h);
+		if (this.canvas.width < w || this.canvas.height < h) {
+			this.canvas.width = Math.max(this.canvas.width, w);
+			this.canvas.height = Math.max(this.canvas.height, h);
+		}
+
+		const key = `${w}x${h}`;
+		let fboSet = this.fboCache.get(key);
+		if (!fboSet) {
+			fboSet = {
+				bg: this._makeFBO(w, h),
+				blurA: this._makeFBO(w, h),
+				blurB: this._makeFBO(w, h),
+			};
+			this.fboCache.set(key, fboSet);
+		}
+		this.activeFBOs = fboSet;
 	}
 
 	private _makeFBO(w: number, h: number): FBO {
@@ -317,6 +352,12 @@ export class GlassRenderer {
 		const gl = this.gl;
 		gl.deleteFramebuffer(fboObj.fbo);
 		gl.deleteTexture(fboObj.tex);
+	}
+
+	private _freeFBOSet(fboSet: FBOSet): void {
+		this._freeFBO(fboSet.bg);
+		this._freeFBO(fboSet.blurA);
+		this._freeFBO(fboSet.blurB);
 	}
 
 	// ────────────────────────────────────────────

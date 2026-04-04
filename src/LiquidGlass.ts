@@ -42,6 +42,11 @@ interface GlassCacheEntry {
 	centerY: number;
 }
 
+interface ConfigCachedElement extends HTMLElement {
+	configCache?: Partial<GlassConfig>;
+	configCacheKey?: string;
+}
+
 interface SizeEntry {
 	w: number;
 	h: number;
@@ -76,12 +81,17 @@ export class LiquidGlass {
 	readonly capture: HtmlCapture;
 	readonly renderer: GlassRenderer;
 
+	/** Current frames-per-second (updated every frame). */
+	fps = 0;
+
 	private _running = false;
 	private _rafId = 0;
 	private _hasDynamic = false;
 	private _dirty = true;
 	private _capturingGlassContent = false;
 	private _glassContentDirty = false;
+	private _fpsFrames = 0;
+	private _fpsTime = 0;
 
 	private _observer: MutationObserver | null = null;
 	private _glassSubtreeObserver: MutationObserver | null = null;
@@ -153,14 +163,22 @@ export class LiquidGlass {
 		});
 		this._observer.observe(this.root, { childList: true });
 
-		this._glassSubtreeObserver = new MutationObserver(() => {
-			this._glassContentDirty = true;
+		this._glassSubtreeObserver = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				if (mutation.type === 'attributes' && mutation.attributeName === 'data-config') {
+					this._dirty = true;
+					continue;
+				}
+				this._glassContentDirty = true;
+			}
 		});
 		for (const el of this.glassSet) {
 			this._glassSubtreeObserver.observe(el, {
 				childList: true,
 				subtree: true,
 				characterData: true,
+				attributes: true,
+				attributeFilter: ['data-config'],
 			});
 		}
 		this._glassContentDirty = false;
@@ -301,15 +319,28 @@ export class LiquidGlass {
 	// ────────────────────────────────────────────
 
 	private _getConfig(el: HTMLElement): GlassConfig {
-		let perElement: Partial<GlassConfig> = {};
-		if ((el as HTMLElement).dataset.config) {
-			try {
-				perElement = JSON.parse((el as HTMLElement).dataset.config!);
-			} catch (_e) {
-				console.warn('LiquidGlass: invalid JSON in data-config for element:', el);
+		const cachedEl = el as ConfigCachedElement;
+		const configKey = el.dataset.config ?? '';
+
+		if (cachedEl.configCacheKey !== configKey) {
+			let perElement: Partial<GlassConfig> = {};
+			if (configKey) {
+				try {
+					const parsed = JSON.parse(configKey);
+					if (parsed && typeof parsed === 'object') {
+						perElement = parsed as Partial<GlassConfig>;
+					} else {
+						console.warn('LiquidGlass: data-config must decode to an object for element:', el);
+					}
+				} catch (_e) {
+					console.warn('LiquidGlass: invalid JSON in data-config for element:', el);
+				}
 			}
+			cachedEl.configCache = perElement;
+			cachedEl.configCacheKey = configKey;
 		}
-		return { ...this.defaults, ...perElement };
+
+		return { ...this.defaults, ...(cachedEl.configCache || {}) };
 	}
 
 	// ────────────────────────────────────────────
@@ -455,6 +486,15 @@ export class LiquidGlass {
 	private _renderLoop(): void {
 		if (!this._running) return;
 
+		// FPS tracking
+		const now = performance.now();
+		this._fpsFrames++;
+		if (now - this._fpsTime >= 1000) {
+			this.fps = this._fpsFrames;
+			this._fpsFrames = 0;
+			this._fpsTime = now;
+		}
+
 		if (this._checkGlassSizeChanges()) {
 			this._dirty = true;
 		}
@@ -505,22 +545,29 @@ export class LiquidGlass {
 					: (!cached || posChanged || bgChanged);
 
 				if (needsShaderRender && glassCanvas) {
-					this.renderer.uploadAndBlur(this.capture.canvas, config.blurAmount);
+					const cropX = Math.round((elRect.left - rootRect.left - SHADOW_PAD) * dpr);
+					const cropY = Math.round((elRect.top - rootRect.top - SHADOW_PAD) * dpr);
+					this.renderer.uploadAndBlur(
+						this.capture.canvas,
+						cropX,
+						cropY,
+						glassCanvas.width,
+						glassCanvas.height,
+						config.blurAmount,
+					);
 					this.renderer.clear();
 					this.renderer.renderGlassPanel(
-						config, centerX, centerY,
-						elRect.width, elRect.height, dpr,
+						config,
+						elRect.width,
+						elRect.height,
+						dpr,
 					);
 
 					const ctx = glassCanvas.getContext('2d')!;
 					ctx.clearRect(0, 0, glassCanvas.width, glassCanvas.height);
-					const srcX = (elRect.left - rootRect.left - SHADOW_PAD) * dpr;
-					const srcY = (elRect.top - rootRect.top - SHADOW_PAD) * dpr;
-					const srcW = (elRect.width + SHADOW_PAD * 2) * dpr;
-					const srcH = (elRect.height + SHADOW_PAD * 2) * dpr;
 					ctx.drawImage(
 						this.renderer.canvas,
-						srcX, srcY, srcW, srcH,
+						0, 0, glassCanvas.width, glassCanvas.height,
 						0, 0, glassCanvas.width, glassCanvas.height,
 					);
 
