@@ -51,6 +51,26 @@ export class GlassRenderer {
 		/** Current canvas dimensions */
 		this.width = 0;
 		this.height = 0;
+
+		/** Whether the WebGL context is lost */
+		this.contextLost = false;
+
+		// Handle WebGL context loss / restore
+		this._onContextLost = (e) => {
+			e.preventDefault();
+			this.contextLost = true;
+			console.warn('LiquidGlass: WebGL context lost.');
+		};
+		this._onContextRestored = () => {
+			console.info('LiquidGlass: WebGL context restored — reinitialising.');
+			this.contextLost = false;
+			this._initPrograms();
+			this._initBuffers();
+			this.bgTex = null;
+			this._initFBOs(this.width, this.height);
+		};
+		this.canvas.addEventListener('webglcontextlost', this._onContextLost);
+		this.canvas.addEventListener('webglcontextrestored', this._onContextRestored);
 	}
 
 	// ────────────────────────────────────────────
@@ -129,6 +149,7 @@ export class GlassRenderer {
 	 * @param {number}           blurAmount    Blur strength (0–1).
 	 */
 	uploadAndBlur(sourceCanvas, blurAmount) {
+		if (this.contextLost) return;
 		const gl = this.gl;
 		const W = this.width;
 		const H = this.height;
@@ -146,7 +167,7 @@ export class GlassRenderer {
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 
-		// Blit source → bgFBO (identity transform)
+		// Blit source → bgFBO (full resolution)
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.bgFBO.fbo);
 		gl.viewport(0, 0, W, H);
 		gl.useProgram(this.blitP);
@@ -157,33 +178,38 @@ export class GlassRenderer {
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
 
-		// Downsample bgFBO → blurA
-		const hw = this.blurA.w;
-		const hh = this.blurA.h;
+		// Copy bgFBO → blurA at the blur FBO resolution.
+		// When blurAmount > 0 the blur FBOs are half-res for speed.
+		// When blurAmount == 0 they are full-res so the frost texture
+		// (u_blurTex) doesn't lose quality.
+		const bw = this.blurA.w;
+		const bh = this.blurA.h;
 		gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA.fbo);
-		gl.viewport(0, 0, hw, hh);
+		gl.viewport(0, 0, bw, bh);
 		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO.tex);
 		gl.uniform2f(this.blitU.u_scale, 1, 1);
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
 
-		// Multi-pass Gaussian blur
-		const spread = blurAmount * 2.5;
-		gl.useProgram(this.blurP);
-		gl.uniform1i(this.blurU.u_tex, 0);
-		for (let i = 0; i < BLUR_ITERATIONS; i++) {
-			// Horizontal blur: blurA → blurB
-			gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurB.fbo);
-			gl.viewport(0, 0, hw, hh);
-			gl.bindTexture(gl.TEXTURE_2D, this.blurA.tex);
-			gl.uniform2f(this.blurU.u_dir, spread / hw, 0);
-			this._drawQuad(this.blurP, this.quadBuf);
+		// Multi-pass Gaussian blur (skip entirely when not needed)
+		if (blurAmount > 0) {
+			const spread = blurAmount * 2.5;
+			gl.useProgram(this.blurP);
+			gl.uniform1i(this.blurU.u_tex, 0);
+			for (let i = 0; i < BLUR_ITERATIONS; i++) {
+				// Horizontal blur: blurA → blurB
+				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurB.fbo);
+				gl.viewport(0, 0, bw, bh);
+				gl.bindTexture(gl.TEXTURE_2D, this.blurA.tex);
+				gl.uniform2f(this.blurU.u_dir, spread / bw, 0);
+				this._drawQuad(this.blurP, this.quadBuf);
 
-			// Vertical blur: blurB → blurA
-			gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA.fbo);
-			gl.bindTexture(gl.TEXTURE_2D, this.blurB.tex);
-			gl.uniform2f(this.blurU.u_dir, 0, spread / hh);
-			this._drawQuad(this.blurP, this.quadBuf);
+				// Vertical blur: blurB → blurA
+				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA.fbo);
+				gl.bindTexture(gl.TEXTURE_2D, this.blurB.tex);
+				gl.uniform2f(this.blurU.u_dir, 0, spread / bh);
+				this._drawQuad(this.blurP, this.quadBuf);
+			}
 		}
 	}
 
@@ -204,6 +230,7 @@ export class GlassRenderer {
 	 * @param {number} dpr      Device pixel ratio.
 	 */
 	renderGlassPanel(config, centerX, centerY, width, height, dpr) {
+		if (this.contextLost) return;
 		const gl = this.gl;
 		const W = this.width;
 		const H = this.height;
@@ -267,16 +294,20 @@ export class GlassRenderer {
 	 * Destroy WebGL resources.
 	 */
 	destroy() {
-		const gl = this.gl;
-		this._freeFBO(this.bgFBO);
-		this._freeFBO(this.blurA);
-		this._freeFBO(this.blurB);
-		if (this.bgTex) gl.deleteTexture(this.bgTex);
-		gl.deleteBuffer(this.quadBuf);
-		gl.deleteBuffer(this.panelBuf);
-		gl.deleteProgram(this.blitP);
-		gl.deleteProgram(this.blurP);
-		gl.deleteProgram(this.glassP);
+		this.canvas.removeEventListener('webglcontextlost', this._onContextLost);
+		this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
+		if (!this.contextLost) {
+			const gl = this.gl;
+			this._freeFBO(this.bgFBO);
+			this._freeFBO(this.blurA);
+			this._freeFBO(this.blurB);
+			if (this.bgTex) gl.deleteTexture(this.bgTex);
+			gl.deleteBuffer(this.quadBuf);
+			gl.deleteBuffer(this.panelBuf);
+			gl.deleteProgram(this.blitP);
+			gl.deleteProgram(this.blurP);
+			gl.deleteProgram(this.glassP);
+		}
 		this.canvas.remove();
 	}
 
@@ -286,18 +317,17 @@ export class GlassRenderer {
 
 	/**
 	 * (Re-)create the framebuffer objects used for the rendering pipeline.
-	 * bgFBO is full resolution; blur FBOs are half resolution.
+	 * All FBOs are full resolution to avoid quality loss when the frost
+	 * texture is sampled without blur (blurAmount = 0).
 	 */
 	_initFBOs(w, h) {
 		this._freeFBO(this.bgFBO);
 		this._freeFBO(this.blurA);
 		this._freeFBO(this.blurB);
 
-		const hw = Math.floor(w / 2);
-		const hh = Math.floor(h / 2);
 		this.bgFBO = this._makeFBO(w, h);
-		this.blurA = this._makeFBO(hw, hh);
-		this.blurB = this._makeFBO(hw, hh);
+		this.blurA = this._makeFBO(w, h);
+		this.blurB = this._makeFBO(w, h);
 	}
 
 	/**
