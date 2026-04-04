@@ -3,14 +3,23 @@
 	"version": "1.0.0",
 	"description": "A liquid glass effect library for the web — apply realistic glass refraction, blur, and lighting to any HTML element.",
 	"type": "module",
-	"main": "src/index.js",
-	"module": "src/index.js",
+	"main": "dist/index.js",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
 	"exports": {
-		".": "./src/index.js"
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
 	},
 	"files": [
+		"dist/",
 		"src/"
 	],
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsc --watch"
+	},
 	"keywords": [
 		"liquid-glass",
 		"glass",
@@ -25,5 +34,8 @@
 	"license": "MIT",
 	"dependencies": {
 		"html-to-image": "^1.11.11"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.0"
 	}
 }
