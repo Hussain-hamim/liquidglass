@@ -2,8 +2,8 @@
  * LiquidGlass — main orchestrator for the liquid glass effect library.
  *
  * Coordinates between:
- *   • HtmlCapture  (renders DOM elements onto a hidden 2D canvas)
- *   • GlassRenderer (WebGL pipeline for the glass effect)
+ *   - HtmlCapture  (renders DOM elements onto a hidden 2D canvas)
+ *   - GlassRenderer (WebGL pipeline for the glass effect)
  *
  * Handles child ordering, layered compositing, floating (drag)
  * behaviour, resize, and the render loop.
@@ -14,53 +14,107 @@
  */
 
 import { DEFAULTS, SHADOW_PAD } from './defaults.js';
+import type { GlassConfig } from './defaults.js';
 import { HtmlCapture } from './HtmlCapture.js';
 import { GlassRenderer } from './GlassRenderer.js';
+
+/** Options accepted by {@link LiquidGlass.init}. */
+export interface LiquidGlassOptions {
+	/** Root container element. */
+	root: HTMLElement;
+	/** Elements to apply the glass effect to. */
+	glassElements?: NodeListOf<HTMLElement> | HTMLElement[];
+	/** Override the default configuration values. */
+	defaults?: Partial<GlassConfig>;
+	/** Use experimental html-in-canvas API. */
+	useHtmlInCanvas?: boolean;
+}
+
+interface DragState {
+	active: boolean;
+	element: HTMLElement | null;
+	offsetX: number;
+	offsetY: number;
+}
+
+interface GlassCacheEntry {
+	centerX: number;
+	centerY: number;
+}
+
+interface SizeEntry {
+	w: number;
+	h: number;
+}
+
+interface ObjectFitRect {
+	sx: number;
+	sy: number;
+	sw: number;
+	sh: number;
+}
 
 export class LiquidGlass {
 	// ────────────────────────────────────────────
 	// Static entry point
 	// ────────────────────────────────────────────
 
-	/**
-	 * Initialise the liquid glass effect.
-	 *
-	 * @param {object}               options
-	 * @param {HTMLElement}          options.root           Root container element.
-	 * @param {NodeList|HTMLElement[]} options.glassElements Elements to apply the glass effect to.
-	 * @param {object}               [options.defaults]     Override the default configuration values.
-	 * @param {boolean}              [options.useHtmlInCanvas=false]  Use experimental html-in-canvas API.
-	 * @returns {Promise<LiquidGlass>}  The instance (call .destroy() to tear down).
-	 */
-	static async init(options) {
+	static async init(options: LiquidGlassOptions): Promise<LiquidGlass> {
 		const instance = new LiquidGlass(options);
 		await instance._start();
 		return instance;
 	}
 
 	// ────────────────────────────────────────────
+	// Instance fields
+	// ────────────────────────────────────────────
+
+	readonly root: HTMLElement;
+	readonly defaults: GlassConfig;
+	readonly glassSet: Set<HTMLElement>;
+	readonly glassCanvases: Map<HTMLElement, HTMLCanvasElement>;
+	readonly capture: HtmlCapture;
+	readonly renderer: GlassRenderer;
+
+	private _running = false;
+	private _rafId = 0;
+	private _hasDynamic = false;
+	private _dirty = true;
+	private _capturingGlassContent = false;
+	private _glassContentDirty = false;
+
+	private _observer: MutationObserver | null = null;
+	private _glassSubtreeObserver: MutationObserver | null = null;
+
+	private _sortedChildren: HTMLElement[] = [];
+	private readonly _glassCache = new Map<HTMLElement, GlassCacheEntry>();
+	private readonly _glassContentImages = new Map<HTMLElement, HTMLCanvasElement>();
+	private readonly _glassLastSize = new Map<HTMLElement, SizeEntry>();
+
+	private readonly _drag: DragState = {
+		active: false,
+		element: null,
+		offsetX: 0,
+		offsetY: 0,
+	};
+
+	private readonly _onResize: () => void;
+	private readonly _onPointerDown: (e: PointerEvent) => void;
+	private readonly _onPointerMove: (e: PointerEvent) => void;
+	private readonly _onPointerUp: (e: PointerEvent) => void;
+
+	// ────────────────────────────────────────────
 	// Constructor (prefer LiquidGlass.init)
 	// ────────────────────────────────────────────
 
-	constructor({ root, glassElements, defaults = {}, useHtmlInCanvas = false }) {
+	constructor({ root, glassElements, defaults = {}, useHtmlInCanvas = false }: LiquidGlassOptions) {
 		if (!root) throw new Error('LiquidGlass: `root` element is required.');
 
-		/** @type {HTMLElement} */
 		this.root = root;
-
-		/** Merged global defaults */
 		this.defaults = { ...DEFAULTS, ...defaults };
-
-		/** Set of glass elements (as provided) */
 		this.glassSet = new Set(Array.from(glassElements || []));
-
-		/** Map from glass element → its child <canvas> */
 		this.glassCanvases = new Map();
-
-		/** HTML capture system */
 		this.capture = new HtmlCapture(root, useHtmlInCanvas);
-
-		/** WebGL glass renderer */
 		this.renderer = new GlassRenderer();
 
 		// When the WebGL context is restored, invalidate all caches so
@@ -70,103 +124,35 @@ export class LiquidGlass {
 			this._dirty = true;
 		});
 
-		/** Whether the render loop is active */
-		this._running = false;
-
-		/** Animation frame ID */
-		this._rafId = 0;
-
-		/** Bound event handlers (for cleanup) */
 		this._onResize = this._handleResize.bind(this);
 		this._onPointerDown = this._handlePointerDown.bind(this);
 		this._onPointerMove = this._handlePointerMove.bind(this);
 		this._onPointerUp = this._handlePointerUp.bind(this);
-
-		/** Drag state for floating glass elements */
-		this._drag = {
-			active: false,
-			element: null,
-			offsetX: 0,
-			offsetY: 0,
-		};
-
-		/** Flag: do we have any dynamic children? */
-		this._hasDynamic = false;
-
-		/** Flag: needs full re-capture */
-		this._dirty = true;
-
-		/** Guard: true while _captureGlassContent is running */
-		this._capturingGlassContent = false;
-
-		/** MutationObserver for DOM changes */
-		this._observer = null;
-
-		/** Cached sorted children list */
-		this._sortedChildren = [];
-
-		/**
-		 * Per-glass-element shader cache.  Tracks the last rendered
-		 * position so we can skip the WebGL pipeline when nothing changed.
-		 * @type {Map<HTMLElement, {centerX: number, centerY: number}>}
-		 */
-		this._glassCache = new Map();
-
-		/**
-		 * Pre-captured DOM content for each glass element (text, icons
-		 * etc. WITHOUT the injected shader canvas).  Captured once
-		 * during init, re-captured only when content changes.
-		 * @type {Map<HTMLElement, HTMLCanvasElement>}
-		 */
-		this._glassContentImages = new Map();
-
-		/**
-		 * Last known size of each glass element, used to detect resize.
-		 * @type {Map<HTMLElement, {w: number, h: number}>}
-		 */
-		this._glassLastSize = new Map();
 	}
 
 	// ────────────────────────────────────────────
 	// Lifecycle
 	// ────────────────────────────────────────────
 
-	/**
-	 * Set up the DOM, event listeners, and start the render loop.
-	 */
-	async _start() {
-		// Prepare glass elements (inject child canvases, set styles)
+	private async _start(): Promise<void> {
 		this._setupGlassElements();
-
-		// Detect dynamic children
 		this._hasDynamic = this._detectDynamic();
-
-		// Sort children by stacking order
 		this._sortedChildren = this._getSortedChildren();
-
-		// Initial sizing
 		this._handleResize();
 
-		// Pre-capture glass element DOM content (text etc.) BEFORE the
-		// render loop starts.  The brief display:none on injected canvases
-		// is invisible to the user since no frame has been painted yet.
 		await this._captureGlassContent();
 
-		// Bind events
 		window.addEventListener('resize', this._onResize);
 		this.root.addEventListener('pointerdown', this._onPointerDown);
 		window.addEventListener('pointermove', this._onPointerMove);
 		window.addEventListener('pointerup', this._onPointerUp);
 
-		// Observe DOM mutations (children added/removed on root)
 		this._observer = new MutationObserver(() => {
 			this._sortedChildren = this._getSortedChildren();
 			this._dirty = true;
 		});
 		this._observer.observe(this.root, { childList: true });
 
-		// Observe subtree mutations on glass elements so we know when
-		// their content changes and the pre-captured image is stale.
 		this._glassSubtreeObserver = new MutationObserver(() => {
 			this._glassContentDirty = true;
 		});
@@ -179,17 +165,12 @@ export class LiquidGlass {
 		}
 		this._glassContentDirty = false;
 
-		// Start render loop
 		this._running = true;
 		this._dirty = true;
 		this._rafId = requestAnimationFrame(() => this._renderLoop());
 	}
 
-	/**
-	 * Tear down everything: stop the loop, remove event listeners,
-	 * remove injected canvases, free WebGL resources.
-	 */
-	destroy() {
+	destroy(): void {
 		this._running = false;
 		cancelAnimationFrame(this._rafId);
 
@@ -198,16 +179,11 @@ export class LiquidGlass {
 		window.removeEventListener('pointermove', this._onPointerMove);
 		window.removeEventListener('pointerup', this._onPointerUp);
 
-		if (this._observer) {
-			this._observer.disconnect();
-			this._observer = null;
-		}
-		if (this._glassSubtreeObserver) {
-			this._glassSubtreeObserver.disconnect();
-			this._glassSubtreeObserver = null;
-		}
+		this._observer?.disconnect();
+		this._observer = null;
+		this._glassSubtreeObserver?.disconnect();
+		this._glassSubtreeObserver = null;
 
-		// Remove injected canvases and reset styles
 		for (const [el, canvas] of this.glassCanvases) {
 			canvas.remove();
 			el.style.removeProperty('position');
@@ -226,32 +202,22 @@ export class LiquidGlass {
 	// Glass element setup
 	// ────────────────────────────────────────────
 
-	/**
-	 * For each glass element, inject a child <canvas> and set
-	 * positioning styles so the canvas covers the element.
-	 */
-	_setupGlassElements() {
+	private _setupGlassElements(): void {
 		for (const el of this.glassSet) {
-			// Only handle direct children of root
 			if (el.parentElement !== this.root) {
 				console.warn('LiquidGlass: glass element is not a direct child of root, skipping.', el);
 				this.glassSet.delete(el);
 				continue;
 			}
 
-			// Set positioning on the glass element so the child canvas
-			// can be absolutely positioned inside it
 			const currentPosition = window.getComputedStyle(el).position;
 			if (currentPosition === 'static') {
 				el.style.position = 'relative';
 			}
-			// Ensure overflow is visible so the shadow padding canvas is not clipped
 			el.style.overflow = 'visible';
 
-			// Create the child canvas
 			const canvas = document.createElement('canvas');
 			canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
-			// Insert at the beginning so content renders above the glass effect
 			el.insertBefore(canvas, el.firstChild);
 
 			this.glassCanvases.set(el, canvas);
@@ -267,18 +233,12 @@ export class LiquidGlass {
 	 * into a standalone canvas, hiding the injected shader canvas so
 	 * it isn't included.
 	 *
-	 * This runs OUTSIDE the render loop — the brief display:none on the
-	 * injected canvases is either invisible (before first paint) or
-	 * imperceptible (single-shot re-capture triggered by mutation).
-	 *
 	 * Guarded against concurrent execution: if a capture is already in
 	 * progress, the flag is re-set so a fresh capture runs after the
 	 * current one completes.
 	 */
-	async _captureGlassContent() {
+	private async _captureGlassContent(): Promise<void> {
 		if (this._capturingGlassContent) {
-			// Another capture is in flight — re-set the dirty flag so
-			// the render loop will retry once the current one finishes.
 			this._glassContentDirty = true;
 			return;
 		}
@@ -305,20 +265,9 @@ export class LiquidGlass {
 	// Child ordering & stacking context
 	// ────────────────────────────────────────────
 
-	/**
-	 * Return direct children of root sorted by their visual stacking
-	 * order (lowest first).
-	 *
-	 * Stacking rules (simplified CSS 2.1 Appendix E):
-	 *   1. Non-positioned elements in DOM order (z-index auto)
-	 *   2. Positioned elements, sorted by z-index then DOM order
-	 *
-	 * @returns {HTMLElement[]}
-	 */
-	_getSortedChildren() {
-		const children = Array.from(this.root.children);
+	private _getSortedChildren(): HTMLElement[] {
+		const children = Array.from(this.root.children) as HTMLElement[];
 
-		// Tag each child with its stacking-relevant properties
 		const tagged = children.map((el, domIndex) => {
 			const style = window.getComputedStyle(el);
 			const positioned = style.position !== 'static';
@@ -326,12 +275,9 @@ export class LiquidGlass {
 			return { el, domIndex, positioned, zIndex };
 		});
 
-		// Sort: non-positioned first (DOM order), then positioned (z-index, then DOM order)
 		tagged.sort((a, b) => {
-			// Non-positioned always below positioned
 			if (!a.positioned && b.positioned) return -1;
 			if (a.positioned && !b.positioned) return 1;
-			// Both positioned — sort by z-index, then DOM order
 			if (a.positioned && b.positioned) {
 				if (a.zIndex !== b.zIndex) return a.zIndex - b.zIndex;
 			}
@@ -341,11 +287,8 @@ export class LiquidGlass {
 		return tagged.map(t => t.el);
 	}
 
-	/**
-	 * Check if any direct child has `data-dynamic`.
-	 */
-	_detectDynamic() {
-		for (const child of this.root.children) {
+	private _detectDynamic(): boolean {
+		for (const child of Array.from(this.root.children) as HTMLElement[]) {
 			if (!this.glassSet.has(child) && child.hasAttribute('data-dynamic')) {
 				return true;
 			}
@@ -357,18 +300,11 @@ export class LiquidGlass {
 	// Configuration
 	// ────────────────────────────────────────────
 
-	/**
-	 * Read the per-element configuration from its dataset.config,
-	 * merge with global defaults, and return the result.
-	 *
-	 * @param {HTMLElement} el  A glass element.
-	 * @returns {object}        Merged configuration.
-	 */
-	_getConfig(el) {
-		let perElement = {};
-		if (el.dataset.config) {
+	private _getConfig(el: HTMLElement): GlassConfig {
+		let perElement: Partial<GlassConfig> = {};
+		if ((el as HTMLElement).dataset.config) {
 			try {
-				perElement = JSON.parse(el.dataset.config);
+				perElement = JSON.parse((el as HTMLElement).dataset.config!);
 			} catch (_e) {
 				console.warn('LiquidGlass: invalid JSON in data-config for element:', el);
 			}
@@ -380,7 +316,7 @@ export class LiquidGlass {
 	// Resize
 	// ────────────────────────────────────────────
 
-	_handleResize() {
+	private _handleResize(): void {
 		const dpr = window.devicePixelRatio || 1;
 		const rect = this.root.getBoundingClientRect();
 		const w = Math.round(rect.width * dpr);
@@ -389,24 +325,16 @@ export class LiquidGlass {
 		this.capture.resize(w, h, dpr);
 		this.renderer.resize(w, h);
 
-		// Resize each glass element's canvas
 		for (const el of this.glassSet) {
 			this._updateGlassCanvasSize(el);
 		}
 
 		this._glassCache.clear();
-		// Glass content images need re-capture at new size
 		this._glassContentDirty = true;
 		this._dirty = true;
 	}
 
-	/**
-	 * Update a glass element's child canvas dimensions and position
-	 * to match its current bounding rect (+ shadow padding).
-	 *
-	 * @param {HTMLElement} el  The glass element.
-	 */
-	_updateGlassCanvasSize(el) {
+	private _updateGlassCanvasSize(el: HTMLElement): void {
 		const canvas = this.glassCanvases.get(el);
 		if (!canvas) return;
 		const dpr = window.devicePixelRatio || 1;
@@ -426,13 +354,7 @@ export class LiquidGlass {
 		this._glassLastSize.set(el, { w: elRect.width, h: elRect.height });
 	}
 
-	/**
-	 * Check all glass elements for size changes and update their
-	 * canvases if needed.  Called at the top of each frame.
-	 *
-	 * @returns {boolean}  True if any glass element was resized.
-	 */
-	_checkGlassSizeChanges() {
+	private _checkGlassSizeChanges(): boolean {
 		let changed = false;
 		for (const el of this.glassSet) {
 			const elRect = el.getBoundingClientRect();
@@ -442,7 +364,6 @@ export class LiquidGlass {
 				|| Math.abs(last.h - elRect.height) > 0.5
 			) {
 				this._updateGlassCanvasSize(el);
-				// Invalidate this element's shader and content caches
 				this._glassCache.delete(el);
 				this.capture.invalidateCache(el);
 				changed = true;
@@ -458,9 +379,7 @@ export class LiquidGlass {
 	// Floating (drag) behaviour — Pointer Events
 	// ────────────────────────────────────────────
 
-	_handlePointerDown(e) {
-		// Walk sorted children in reverse (topmost first) so we grab
-		// the highest glass element under the pointer.
+	private _handlePointerDown(e: PointerEvent): void {
 		for (let i = this._sortedChildren.length - 1; i >= 0; i--) {
 			const el = this._sortedChildren[i];
 			if (!this.glassSet.has(el)) continue;
@@ -473,9 +392,6 @@ export class LiquidGlass {
 				e.clientX >= rect.left && e.clientX <= rect.right &&
 				e.clientY >= rect.top && e.clientY <= rect.bottom
 			) {
-				// Normalize to explicit left/top pixel values, clearing
-				// any conflicting bottom/right/transform that would
-				// cause the element to jump when we start setting left/top.
 				const rootRect = this.root.getBoundingClientRect();
 				el.style.transform = 'none';
 				el.style.right = 'auto';
@@ -495,7 +411,7 @@ export class LiquidGlass {
 		}
 	}
 
-	_handlePointerMove(e) {
+	private _handlePointerMove(e: PointerEvent): void {
 		if (!this._drag.active) {
 			for (const el of this.glassSet) {
 				const config = this._getConfig(el);
@@ -513,7 +429,7 @@ export class LiquidGlass {
 			return;
 		}
 
-		const el = this._drag.element;
+		const el = this._drag.element!;
 		const rootRect = this.root.getBoundingClientRect();
 		const newLeft = e.clientX - rootRect.left - this._drag.offsetX;
 		const newTop = e.clientY - rootRect.top - this._drag.offsetY;
@@ -524,9 +440,9 @@ export class LiquidGlass {
 		this._dirty = true;
 	}
 
-	_handlePointerUp(_e) {
+	private _handlePointerUp(_e: PointerEvent): void {
 		if (!this._drag.active) return;
-		this._drag.element.style.cursor = '';
+		this._drag.element!.style.cursor = '';
 		this._drag.active = false;
 		this._drag.element = null;
 		this._dirty = true;
@@ -536,25 +452,13 @@ export class LiquidGlass {
 	// Render loop
 	// ────────────────────────────────────────────
 
-	/**
-	 * The render loop.  Schedules itself via requestAnimationFrame.
-	 * The frame body is synchronous (no await) for maximum performance;
-	 * async work (glass content re-capture) is dispatched outside the
-	 * frame when needed.
-	 */
-	_renderLoop() {
+	private _renderLoop(): void {
 		if (!this._running) return;
 
-		// Check if any glass element changed size (e.g. CSS animation,
-		// responsive layout, programmatic style change).  If so, update
-		// its child canvas dimensions and mark caches dirty.
 		if (this._checkGlassSizeChanges()) {
 			this._dirty = true;
 		}
 
-		// If glass DOM content changed (mutation observer), re-capture
-		// it asynchronously.  This is a one-shot operation that runs
-		// outside the hot render path.
 		if (this._glassContentDirty) {
 			this._glassContentDirty = false;
 			this._captureGlassContent();
@@ -569,21 +473,7 @@ export class LiquidGlass {
 		this._rafId = requestAnimationFrame(() => this._renderLoop());
 	}
 
-	/**
-	 * Render a single frame.  **Fully synchronous** — no await calls.
-	 *
-	 * Layered compositing algorithm (bottom → top stacking order):
-	 *
-	 *   Non-glass child  → blit from capture cache (sync drawImage).
-	 *                       Dynamic <canvas> elements are re-read each frame.
-	 *   Glass child      →
-	 *     a. If needed, re-run the WebGL shader pipeline (sync).
-	 *     b. Blit the glass shader canvas onto the hidden canvas (sync).
-	 *     c. Blit the pre-captured glass DOM content image onto the
-	 *        hidden canvas so higher glass elements can see text etc.
-	 *        through refraction (sync drawImage).
-	 */
-	_renderFrame() {
+	private _renderFrame(): void {
 		const dpr = window.devicePixelRatio || 1;
 		const rootRect = this.root.getBoundingClientRect();
 		const isDragging = this._drag.active;
@@ -591,11 +481,8 @@ export class LiquidGlass {
 		const needsRender = this._dirty || this._hasDynamic || isDragging;
 		if (!needsRender) return;
 
-		// Clear the hidden 2D canvas for layer-by-layer compositing
 		this.capture.clear();
 
-		// bgChanged tracks whether any layer below the *current* child
-		// changed since last frame, which invalidates glass caches above.
 		let bgChanged = this._dirty;
 
 		for (const child of this._sortedChildren) {
@@ -608,7 +495,6 @@ export class LiquidGlass {
 				const glassCanvas = this.glassCanvases.get(child);
 				const isBeingDragged = isDragging && this._drag.element === child;
 
-				// ── Decide whether the WebGL shader needs to re-run ──
 				const cached = this._glassCache.get(child);
 				const posChanged = !cached
 					|| Math.abs(cached.centerX - centerX) > 0.5
@@ -619,7 +505,6 @@ export class LiquidGlass {
 					: (!cached || posChanged || bgChanged);
 
 				if (needsShaderRender && glassCanvas) {
-					// Upload the current hidden canvas as the background
 					this.renderer.uploadAndBlur(this.capture.canvas, config.blurAmount);
 					this.renderer.clear();
 					this.renderer.renderGlassPanel(
@@ -627,8 +512,7 @@ export class LiquidGlass {
 						elRect.width, elRect.height, dpr,
 					);
 
-					// Copy from offscreen WebGL canvas → glass child canvas
-					const ctx = glassCanvas.getContext('2d');
+					const ctx = glassCanvas.getContext('2d')!;
 					ctx.clearRect(0, 0, glassCanvas.width, glassCanvas.height);
 					const srcX = (elRect.left - rootRect.left - SHADOW_PAD) * dpr;
 					const srcY = (elRect.top - rootRect.top - SHADOW_PAD) * dpr;
@@ -644,13 +528,9 @@ export class LiquidGlass {
 					bgChanged = true;
 				}
 
-				// ── Composite glass onto hidden canvas for higher layers ──
-
-				// 1) Blit the shader canvas (includes shadow)
+				// Composite glass onto hidden canvas for higher layers
 				this._blitGlassShader(child, elRect, rootRect, dpr);
 
-				// 2) Overlay the pre-captured DOM content (text etc.)
-				//    at the glass element's current position.
 				const contentImg = this._glassContentImages.get(child);
 				if (contentImg) {
 					const cx = (elRect.left - rootRect.left) * dpr;
@@ -665,10 +545,6 @@ export class LiquidGlass {
 				const isDynamic = child.hasAttribute('data-dynamic');
 				const tag = child.tagName;
 
-				// Sync fast paths: <canvas>, <img>, and <video>
-				// are drawn directly via ctx.drawImage — no
-				// html-to-image overhead, no async, no cache miss
-				// on the first frame after resize.
 				if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') {
 					const r = child.getBoundingClientRect();
 					const dx = (r.left - rootRect.left) * dpr;
@@ -677,11 +553,15 @@ export class LiquidGlass {
 					const dh = r.height * dpr;
 
 					if (tag === 'CANVAS') {
-						this.capture.ctx.drawImage(child, dx, dy, dw, dh);
+						this.capture.ctx.drawImage(child as HTMLCanvasElement, dx, dy, dw, dh);
 					} else {
-						// For <img>/<video>, respect object-fit/object-position
-						const natW = tag === 'IMG' ? child.naturalWidth : child.videoWidth;
-						const natH = tag === 'IMG' ? child.naturalHeight : child.videoHeight;
+						const mediaEl = child as HTMLImageElement | HTMLVideoElement;
+						const natW = 'naturalWidth' in mediaEl
+							? (mediaEl as HTMLImageElement).naturalWidth
+							: (mediaEl as HTMLVideoElement).videoWidth;
+						const natH = 'naturalHeight' in mediaEl
+							? (mediaEl as HTMLImageElement).naturalHeight
+							: (mediaEl as HTMLVideoElement).videoHeight;
 
 						if (natW && natH) {
 							const computed = getComputedStyle(child);
@@ -689,32 +569,24 @@ export class LiquidGlass {
 							const pos = computed.objectPosition || '50% 50%';
 
 							const src = LiquidGlass._objectFitRect(
-								natW, natH, r.width, r.height, fit, pos
+								natW, natH, r.width, r.height, fit, pos,
 							);
 							this.capture.ctx.drawImage(
-								child,
+								mediaEl,
 								src.sx, src.sy, src.sw, src.sh,
-								dx, dy, dw, dh
+								dx, dy, dw, dh,
 							);
 						} else {
-							// Natural dimensions not yet available — draw stretched
-							this.capture.ctx.drawImage(child, dx, dy, dw, dh);
+							this.capture.ctx.drawImage(mediaEl, dx, dy, dw, dh);
 						}
 					}
 					if (isDynamic) bgChanged = true;
 				} else if (!isDynamic) {
-					// Static non-media: blit from cache (populated
-					// on a prior frame's async pass or first render)
 					if (!this.capture.blitFromCache(child)) {
-						// No cache yet — schedule async capture.
-						// It won't be ready THIS frame, but will be
-						// available from the next frame onwards.
 						this.capture.captureElement(child, false);
 						this._dirty = true;
 					}
 				} else {
-					// Dynamic non-media: must re-capture every frame.
-					// This is inherently async / expensive — schedule it.
 					this.capture.captureElement(child, true);
 					bgChanged = true;
 				}
@@ -726,12 +598,12 @@ export class LiquidGlass {
 		}
 	}
 
-	/**
-	 * Blit a glass element's shader canvas onto the hidden 2D canvas.
-	 * Fast, synchronous helper used for compositing during layered
-	 * rendering and as the drag fast-path.
-	 */
-	_blitGlassShader(child, elRect, rootRect, dpr) {
+	private _blitGlassShader(
+		child: HTMLElement,
+		elRect: DOMRect,
+		rootRect: DOMRect,
+		dpr: number,
+	): void {
 		const glassCanvas = this.glassCanvases.get(child);
 		if (!glassCanvas) return;
 		const compX = (elRect.left - rootRect.left - SHADOW_PAD) * dpr;
@@ -741,30 +613,23 @@ export class LiquidGlass {
 		this.capture.compositeGlass(glassCanvas, compX, compY, compW, compH);
 	}
 
-	/**
-	 * Compute the source rectangle for drawImage that replicates CSS
-	 * object-fit / object-position behaviour.
-	 *
-	 * @param {number} natW   Natural (intrinsic) width of the media.
-	 * @param {number} natH   Natural (intrinsic) height of the media.
-	 * @param {number} boxW   Layout box width in CSS pixels.
-	 * @param {number} boxH   Layout box height in CSS pixels.
-	 * @param {string} fit    Computed object-fit value.
-	 * @param {string} pos    Computed object-position value (e.g. "50% 50%").
-	 * @returns {{sx:number, sy:number, sw:number, sh:number}}
-	 */
-	static _objectFitRect(natW, natH, boxW, boxH, fit, pos) {
-		// Default: use the entire source image
+	/** Compute the source rectangle for drawImage that replicates CSS object-fit / object-position. */
+	static _objectFitRect(
+		natW: number,
+		natH: number,
+		boxW: number,
+		boxH: number,
+		fit: string,
+		pos: string,
+	): ObjectFitRect {
 		let sx = 0, sy = 0, sw = natW, sh = natH;
 
-		if (fit === 'fill' || fit === 'scale-down' && natW <= boxW && natH <= boxH) {
-			// fill: stretch source to box — use full source rect
+		if (fit === 'fill' || (fit === 'scale-down' && natW <= boxW && natH <= boxH)) {
 			return { sx, sy, sw, sh };
 		}
 
-		// Parse object-position into fractions (default 50% 50%)
 		const parts = pos.split(/\s+/);
-		const parseFrac = (v, total) => {
+		const parseFrac = (v: string, total: number): number => {
 			if (v.endsWith('%')) return parseFloat(v) / 100;
 			return parseFloat(v) / total;
 		};
@@ -772,31 +637,20 @@ export class LiquidGlass {
 		const fy = parseFrac(parts[1] || '50%', boxH);
 
 		if (fit === 'cover') {
-			// Scale image to cover box; crop overflow
 			const scale = Math.max(boxW / natW, boxH / natH);
 			sw = boxW / scale;
 			sh = boxH / scale;
 			sx = (natW - sw) * fx;
 			sy = (natH - sh) * fy;
 		} else if (fit === 'contain' || fit === 'scale-down') {
-			// contain: entire image visible, letterboxed. The visible
-			// portion of the BOX maps to a sub-region of source pixels
-			// only if we're told to draw the full box.  Since our
-			// destination rect already matches the element box, we need
-			// the inverse mapping: which part of the source maps onto
-			// the full destination.  For contain the entire source is
-			// visible, so use full source rect.
 			return { sx: 0, sy: 0, sw: natW, sh: natH };
-		}
-		// 'none' — draw at native size, centered per object-position
-		else if (fit === 'none') {
+		} else if (fit === 'none') {
 			sw = boxW;
 			sh = boxH;
 			sx = (natW - sw) * fx;
 			sy = (natH - sh) * fy;
 		}
 
-		// Clamp to valid source bounds
 		sx = Math.max(0, Math.min(sx, natW - 1));
 		sy = Math.max(0, Math.min(sy, natH - 1));
 		sw = Math.min(sw, natW - sx);

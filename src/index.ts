@@ -7,7 +7,7 @@
  * @example
  *   import { LiquidGlass } from 'liquid-glass';
  *
- *   const instance = LiquidGlass.init({
+ *   const instance = await LiquidGlass.init({
  *       root: document.querySelector('#my-root'),
  *       glassElements: document.querySelectorAll('.glass'),
  *   });
@@ -19,4 +19,6 @@
  */
 
 export { LiquidGlass } from './LiquidGlass.js';
+export type { LiquidGlassOptions } from './LiquidGlass.js';
 export { DEFAULTS } from './defaults.js';
+export type { GlassConfig } from './defaults.js';

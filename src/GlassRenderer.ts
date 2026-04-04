@@ -13,50 +13,66 @@
 
 import { VS_QUAD, FS_BLIT, FS_BLUR, VS_GLASS, FS_GLASS } from './shaders.js';
 import { BLUR_ITERATIONS, SHADOW_PAD } from './defaults.js';
+import type { GlassConfig } from './defaults.js';
+
+interface FBO {
+	fbo: WebGLFramebuffer;
+	tex: WebGLTexture;
+	w: number;
+	h: number;
+}
+
+type UniformMap = Record<string, WebGLUniformLocation | null>;
 
 export class GlassRenderer {
+	readonly canvas: HTMLCanvasElement;
+	readonly gl: WebGLRenderingContext;
+
+	private blitP!: WebGLProgram;
+	private blitU!: UniformMap;
+	private blurP!: WebGLProgram;
+	private blurU!: UniformMap;
+	private glassP!: WebGLProgram;
+	private glassU!: UniformMap;
+
+	private quadBuf!: WebGLBuffer;
+	private panelBuf!: WebGLBuffer;
+
+	private bgFBO: FBO | null = null;
+	private blurA: FBO | null = null;
+	private blurB: FBO | null = null;
+
+	private bgTex: WebGLTexture | null = null;
+
+	width = 0;
+	height = 0;
+
+	contextLost = false;
+
+	private _onContextLost: (e: Event) => void;
+	private _onContextRestored: () => void;
+
 	constructor() {
-		/** Offscreen WebGL canvas (not added to DOM) */
 		this.canvas = document.createElement('canvas');
 		this.canvas.style.display = 'none';
-		// Append to body so drawImage can read from it
 		document.body.appendChild(this.canvas);
 
-		/** @type {WebGLRenderingContext} */
-		this.gl = this.canvas.getContext('webgl', {
+		const gl = this.canvas.getContext('webgl', {
 			alpha: true,
 			premultipliedAlpha: false,
 			antialias: false,
 			preserveDrawingBuffer: true,
 		});
 
-		if (!this.gl) {
+		if (!gl) {
 			throw new Error('LiquidGlass: WebGL is not supported in this browser.');
 		}
+		this.gl = gl;
 
-		// Compile shader programs
 		this._initPrograms();
-		// Create geometry buffers
 		this._initBuffers();
 
-		// FBOs (created on resize)
-		/** @type {{fbo: WebGLFramebuffer, tex: WebGLTexture, w: number, h: number}|null} */
-		this.bgFBO = null;
-		this.blurA = null;
-		this.blurB = null;
-
-		/** Uploaded background texture */
-		this.bgTex = null;
-
-		/** Current canvas dimensions */
-		this.width = 0;
-		this.height = 0;
-
-		/** Whether the WebGL context is lost */
-		this.contextLost = false;
-
-		// Handle WebGL context loss / restore
-		this._onContextLost = (e) => {
+		this._onContextLost = (e: Event) => {
 			e.preventDefault();
 			this.contextLost = true;
 			console.warn('LiquidGlass: WebGL context lost.');
@@ -77,21 +93,13 @@ export class GlassRenderer {
 	// Initialisation
 	// ────────────────────────────────────────────
 
-	/**
-	 * Compile and link all shader programs, and cache uniform locations.
-	 */
-	_initPrograms() {
-		const gl = this.gl;
-
-		// Blit program (background copy / downsample)
+	private _initPrograms(): void {
 		this.blitP = this._link(VS_QUAD, FS_BLIT);
 		this.blitU = this._uloc(this.blitP, ['u_tex', 'u_scale', 'u_offset']);
 
-		// Blur program (9-tap Gaussian, single direction)
 		this.blurP = this._link(VS_QUAD, FS_BLUR);
 		this.blurU = this._uloc(this.blurP, ['u_tex', 'u_dir']);
 
-		// Glass program (core liquid-glass composite)
 		this.glassP = this._link(VS_GLASS, FS_GLASS);
 		this.glassU = this._uloc(this.glassP, [
 			'u_bgTex', 'u_blurTex', 'u_center', 'u_size', 'u_radius',
@@ -102,19 +110,14 @@ export class GlassRenderer {
 		]);
 	}
 
-	/**
-	 * Create vertex buffers for the full-screen quad and the panel quad.
-	 */
-	_initBuffers() {
+	private _initBuffers(): void {
 		const gl = this.gl;
 
-		// Full-screen quad (-1 to +1)
-		this.quadBuf = gl.createBuffer();
+		this.quadBuf = gl.createBuffer()!;
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
-		// Panel quad (-0.5 to +0.5, scaled by size in vertex shader)
-		this.panelBuf = gl.createBuffer();
+		this.panelBuf = gl.createBuffer()!;
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.panelBuf);
 		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-.5, -.5, .5, -.5, -.5, .5, .5, .5]), gl.STATIC_DRAW);
 	}
@@ -123,13 +126,7 @@ export class GlassRenderer {
 	// Resize
 	// ────────────────────────────────────────────
 
-	/**
-	 * Resize the offscreen canvas and recreate FBOs.
-	 *
-	 * @param {number} width   Width in device pixels.
-	 * @param {number} height  Height in device pixels.
-	 */
-	resize(width, height) {
+	resize(width: number, height: number): void {
 		this.width = width;
 		this.height = height;
 		this.canvas.width = width;
@@ -141,34 +138,26 @@ export class GlassRenderer {
 	// Background upload
 	// ────────────────────────────────────────────
 
-	/**
-	 * Upload a 2D canvas (the captured HTML content) as the background
-	 * texture, then blit it into the bgFBO and prepare the blur chain.
-	 *
-	 * @param {HTMLCanvasElement} sourceCanvas  The hidden 2D capture canvas.
-	 * @param {number}           blurAmount    Blur strength (0–1).
-	 */
-	uploadAndBlur(sourceCanvas, blurAmount) {
+	uploadAndBlur(sourceCanvas: HTMLCanvasElement, blurAmount: number): void {
 		if (this.contextLost) return;
 		const gl = this.gl;
 		const W = this.width;
 		const H = this.height;
 
-		// Upload source canvas as a texture
 		if (!this.bgTex) {
 			this.bgTex = gl.createTexture();
 		}
 		gl.bindTexture(gl.TEXTURE_2D, this.bgTex);
-		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true as unknown as number);
 		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false as unknown as number);
 
 		// Blit source → bgFBO (full resolution)
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.bgFBO.fbo);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.bgFBO!.fbo);
 		gl.viewport(0, 0, W, H);
 		gl.useProgram(this.blitP);
 		gl.activeTexture(gl.TEXTURE0);
@@ -178,15 +167,12 @@ export class GlassRenderer {
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
 
-		// Copy bgFBO → blurA at the blur FBO resolution.
-		// When blurAmount > 0 the blur FBOs are half-res for speed.
-		// When blurAmount == 0 they are full-res so the frost texture
-		// (u_blurTex) doesn't lose quality.
-		const bw = this.blurA.w;
-		const bh = this.blurA.h;
-		gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA.fbo);
+		// Copy bgFBO → blurA
+		const bw = this.blurA!.w;
+		const bh = this.blurA!.h;
+		gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA!.fbo);
 		gl.viewport(0, 0, bw, bh);
-		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO.tex);
+		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO!.tex);
 		gl.uniform2f(this.blitU.u_scale, 1, 1);
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
@@ -197,16 +183,14 @@ export class GlassRenderer {
 			gl.useProgram(this.blurP);
 			gl.uniform1i(this.blurU.u_tex, 0);
 			for (let i = 0; i < BLUR_ITERATIONS; i++) {
-				// Horizontal blur: blurA → blurB
-				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurB.fbo);
+				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurB!.fbo);
 				gl.viewport(0, 0, bw, bh);
-				gl.bindTexture(gl.TEXTURE_2D, this.blurA.tex);
+				gl.bindTexture(gl.TEXTURE_2D, this.blurA!.tex);
 				gl.uniform2f(this.blurU.u_dir, spread / bw, 0);
 				this._drawQuad(this.blurP, this.quadBuf);
 
-				// Vertical blur: blurB → blurA
-				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA.fbo);
-				gl.bindTexture(gl.TEXTURE_2D, this.blurB.tex);
+				gl.bindFramebuffer(gl.FRAMEBUFFER, this.blurA!.fbo);
+				gl.bindTexture(gl.TEXTURE_2D, this.blurB!.tex);
 				gl.uniform2f(this.blurU.u_dir, 0, spread / bh);
 				this._drawQuad(this.blurP, this.quadBuf);
 			}
@@ -217,19 +201,14 @@ export class GlassRenderer {
 	// Glass panel rendering
 	// ────────────────────────────────────────────
 
-	/**
-	 * Render a single glass panel onto the offscreen WebGL canvas.
-	 * The caller should then copy the relevant region to the glass
-	 * element's child canvas via drawImage.
-	 *
-	 * @param {object} config   Per-panel configuration (merged defaults + overrides).
-	 * @param {number} centerX  Panel centre X in root-pixel coords.
-	 * @param {number} centerY  Panel centre Y in root-pixel coords.
-	 * @param {number} width    Panel width in px.
-	 * @param {number} height   Panel height in px.
-	 * @param {number} dpr      Device pixel ratio.
-	 */
-	renderGlassPanel(config, centerX, centerY, width, height, dpr) {
+	renderGlassPanel(
+		config: GlassConfig,
+		centerX: number,
+		centerY: number,
+		width: number,
+		height: number,
+		dpr: number,
+	): void {
 		if (this.contextLost) return;
 		const gl = this.gl;
 		const W = this.width;
@@ -239,24 +218,20 @@ export class GlassRenderer {
 		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 		gl.useProgram(this.glassP);
 
-		// Bind background and blur textures
 		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO.tex);
+		gl.bindTexture(gl.TEXTURE_2D, this.bgFBO!.tex);
 		gl.uniform1i(this.glassU.u_bgTex, 0);
 		gl.activeTexture(gl.TEXTURE1);
-		gl.bindTexture(gl.TEXTURE_2D, this.blurA.tex);
+		gl.bindTexture(gl.TEXTURE_2D, this.blurA!.tex);
 		gl.uniform1i(this.glassU.u_blurTex, 1);
 
-		// Viewport & resolution
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		gl.viewport(0, 0, W, H);
 		gl.uniform2f(this.glassU.u_res, W, H);
 
-		// Panel geometry
 		gl.uniform2f(this.glassU.u_center, centerX * dpr, centerY * dpr);
 		gl.uniform2f(this.glassU.u_size, width * dpr, height * dpr);
 
-		// Effect uniforms
 		gl.uniform1f(this.glassU.u_radius, config.cornerRadius * dpr);
 		gl.uniform1f(this.glassU.u_pad, SHADOW_PAD * dpr);
 		gl.uniform1f(this.glassU.u_frost, config.frostAmount);
@@ -279,10 +254,7 @@ export class GlassRenderer {
 		gl.disable(gl.BLEND);
 	}
 
-	/**
-	 * Clear the offscreen WebGL canvas.
-	 */
-	clear() {
+	clear(): void {
 		const gl = this.gl;
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		gl.viewport(0, 0, this.width, this.height);
@@ -290,10 +262,7 @@ export class GlassRenderer {
 		gl.clear(gl.COLOR_BUFFER_BIT);
 	}
 
-	/**
-	 * Destroy WebGL resources.
-	 */
-	destroy() {
+	destroy(): void {
 		this.canvas.removeEventListener('webglcontextlost', this._onContextLost);
 		this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
 		if (!this.contextLost) {
@@ -315,12 +284,7 @@ export class GlassRenderer {
 	// FBO management
 	// ────────────────────────────────────────────
 
-	/**
-	 * (Re-)create the framebuffer objects used for the rendering pipeline.
-	 * All FBOs are full resolution to avoid quality loss when the frost
-	 * texture is sampled without blur (blurAmount = 0).
-	 */
-	_initFBOs(w, h) {
+	private _initFBOs(w: number, h: number): void {
 		this._freeFBO(this.bgFBO);
 		this._freeFBO(this.blurA);
 		this._freeFBO(this.blurB);
@@ -330,16 +294,9 @@ export class GlassRenderer {
 		this.blurB = this._makeFBO(w, h);
 	}
 
-	/**
-	 * Create a framebuffer object with an RGBA colour attachment.
-	 *
-	 * @param {number} w  Width in pixels.
-	 * @param {number} h  Height in pixels.
-	 * @returns {{fbo: WebGLFramebuffer, tex: WebGLTexture, w: number, h: number}}
-	 */
-	_makeFBO(w, h) {
+	private _makeFBO(w: number, h: number): FBO {
 		const gl = this.gl;
-		const tex = gl.createTexture();
+		const tex = gl.createTexture()!;
 		gl.bindTexture(gl.TEXTURE_2D, tex);
 		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -347,7 +304,7 @@ export class GlassRenderer {
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-		const fbo = gl.createFramebuffer();
+		const fbo = gl.createFramebuffer()!;
 		gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
 		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -355,10 +312,7 @@ export class GlassRenderer {
 		return { fbo, tex, w, h };
 	}
 
-	/**
-	 * Free a framebuffer object and its texture.
-	 */
-	_freeFBO(fboObj) {
+	private _freeFBO(fboObj: FBO | null): void {
 		if (!fboObj) return;
 		const gl = this.gl;
 		gl.deleteFramebuffer(fboObj.fbo);
@@ -369,16 +323,9 @@ export class GlassRenderer {
 	// Shader helpers
 	// ────────────────────────────────────────────
 
-	/**
-	 * Compile a single shader.
-	 *
-	 * @param {string} src   GLSL source.
-	 * @param {number} type  gl.VERTEX_SHADER or gl.FRAGMENT_SHADER.
-	 * @returns {WebGLShader}
-	 */
-	_compile(src, type) {
+	private _compile(src: string, type: number): WebGLShader | null {
 		const gl = this.gl;
-		const s = gl.createShader(type);
+		const s = gl.createShader(type)!;
 		gl.shaderSource(s, src);
 		gl.compileShader(s);
 		if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
@@ -388,49 +335,28 @@ export class GlassRenderer {
 		return s;
 	}
 
-	/**
-	 * Link a vertex + fragment shader into a program.
-	 *
-	 * @param {string} vsSrc  Vertex shader GLSL.
-	 * @param {string} fsSrc  Fragment shader GLSL.
-	 * @returns {WebGLProgram}
-	 */
-	_link(vsSrc, fsSrc) {
+	private _link(vsSrc: string, fsSrc: string): WebGLProgram {
 		const gl = this.gl;
-		const p = gl.createProgram();
-		gl.attachShader(p, this._compile(vsSrc, gl.VERTEX_SHADER));
-		gl.attachShader(p, this._compile(fsSrc, gl.FRAGMENT_SHADER));
+		const p = gl.createProgram()!;
+		gl.attachShader(p, this._compile(vsSrc, gl.VERTEX_SHADER)!);
+		gl.attachShader(p, this._compile(fsSrc, gl.FRAGMENT_SHADER)!);
 		gl.linkProgram(p);
 		if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
 			console.error('LiquidGlass program link error:', gl.getProgramInfoLog(p));
-			return null;
 		}
 		return p;
 	}
 
-	/**
-	 * Look up uniform locations by name.
-	 *
-	 * @param {WebGLProgram} prog   The shader program.
-	 * @param {string[]}     names  Uniform names.
-	 * @returns {Object<string, WebGLUniformLocation>}
-	 */
-	_uloc(prog, names) {
+	private _uloc(prog: WebGLProgram, names: string[]): UniformMap {
 		const gl = this.gl;
-		const u = {};
+		const u: UniformMap = {};
 		for (const n of names) {
 			u[n] = gl.getUniformLocation(prog, n);
 		}
 		return u;
 	}
 
-	/**
-	 * Bind a vertex buffer to a_pos and draw a triangle strip quad.
-	 *
-	 * @param {WebGLProgram} prog  The current shader program.
-	 * @param {WebGLBuffer}  buf   The vertex buffer to bind.
-	 */
-	_drawQuad(prog, buf) {
+	private _drawQuad(prog: WebGLProgram, buf: WebGLBuffer): void {
 		const gl = this.gl;
 		const loc = gl.getAttribLocation(prog, 'a_pos');
 		gl.bindBuffer(gl.ARRAY_BUFFER, buf);

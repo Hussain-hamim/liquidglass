@@ -3,42 +3,65 @@
  * These can be overridden per-element via dataset.config (JSON string)
  * or globally via LiquidGlass.init({ defaults: { ... } }).
  */
-export const DEFAULTS = {
+
+/** Per-element glass configuration. */
+export interface GlassConfig {
 	/** Amount of background blur behind the glass (0 = none, 1 = maximum) */
-	blurAmount: 0.00,
+	blurAmount: number;
 	/** Frost/frosted-glass intensity (0 = clear, 1 = fully frosted) */
-	frostAmount: 1.00,
+	frostAmount: number;
 	/** Refraction strength — how much the glass bends the image behind it */
-	refraction: 0.69,
+	refraction: number;
 	/** Chromatic aberration — color fringing at edges */
-	chromAberration: 0.05,
+	chromAberration: number;
 	/** Edge highlight intensity (inner glow / rim lighting) */
-	edgeHighlight: 0.05,
+	edgeHighlight: number;
 	/** Specular highlight intensity (Blinn-Phong) */
-	specular: 0.00,
+	specular: number;
 	/** Fresnel reflection intensity at grazing angles */
-	fresnel: 1.00,
+	fresnel: number;
 	/** Micro-distortion noise strength */
-	distortion: 0.00,
+	distortion: number;
 	/** Corner radius in CSS pixels */
-	cornerRadius: 65,
+	cornerRadius: number;
 	/** Z-radius (bevel depth) — controls the curvature of the pill bevel */
-	zRadius: 40,
+	zRadius: number;
 	/** Overall opacity of the glass panel */
-	opacity: 1.00,
+	opacity: number;
 	/** Saturation adjustment (-1 = desaturated, 0 = normal, 1 = vivid) */
-	saturation: 0.00,
+	saturation: number;
 	/** Tint strength — cool blue-ish glass tint */
-	tintStrength: 0.00,
+	tintStrength: number;
 	/** Brightness adjustment (-0.5 to 0.5) */
-	brightness: 0.00,
+	brightness: number;
 	/** Shadow opacity (0 = no shadow, 1 = full black) */
-	shadowOpacity: 0.30,
+	shadowOpacity: number;
 	/** Shadow spread in CSS pixels */
-	shadowSpread: 10,
+	shadowSpread: number;
 	/** Shadow vertical offset in CSS pixels */
-	shadowOffsetY: 1,
+	shadowOffsetY: number;
 	/** Whether this glass element can be dragged around (Pointer Events) */
+	floating: boolean;
+}
+
+export const DEFAULTS: GlassConfig = {
+	blurAmount: 0.00,
+	frostAmount: 1.00,
+	refraction: 0.69,
+	chromAberration: 0.05,
+	edgeHighlight: 0.05,
+	specular: 0.00,
+	fresnel: 1.00,
+	distortion: 0.00,
+	cornerRadius: 65,
+	zRadius: 40,
+	opacity: 1.00,
+	saturation: 0.00,
+	tintStrength: 0.00,
+	brightness: 0.00,
+	shadowOpacity: 0.30,
+	shadowSpread: 10,
+	shadowOffsetY: 1,
 	floating: false,
 };
 

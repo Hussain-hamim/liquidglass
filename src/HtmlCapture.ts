@@ -14,34 +14,32 @@
  */
 import { toCanvas } from 'html-to-image';
 
-export class HtmlCapture {
-	/**
-	 * @param {HTMLElement} root        The root container element.
-	 * @param {boolean}     useHtmlApi  If true, use the html-in-canvas API.
-	 */
-	constructor(root, useHtmlApi = false) {
-		/** @type {HTMLElement} */
-		this.root = root;
+interface CacheEntry {
+	canvas: HTMLCanvasElement;
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
 
-		/** Whether to use the experimental html-in-canvas API */
+export class HtmlCapture {
+	readonly root: HTMLElement;
+	useHtmlApi: boolean;
+	readonly canvas: HTMLCanvasElement;
+	readonly ctx: CanvasRenderingContext2D;
+	readonly cache: Map<HTMLElement, CacheEntry>;
+	dpr: number;
+
+	constructor(root: HTMLElement, useHtmlApi = false) {
+		this.root = root;
 		this.useHtmlApi = useHtmlApi;
 
-		/** Hidden 2D canvas that accumulates the captured content */
 		this.canvas = document.createElement('canvas');
 		this.canvas.style.display = 'none';
 		document.body.appendChild(this.canvas);
 
-		/** @type {CanvasRenderingContext2D} */
-		this.ctx = this.canvas.getContext('2d');
-
-		/**
-		 * Cache of already-rendered static elements.
-		 * Maps an element to a pre-rendered canvas snapshot.
-		 * @type {Map<HTMLElement, {canvas: HTMLCanvasElement, x: number, y: number, w: number, h: number}>}
-		 */
+		this.ctx = this.canvas.getContext('2d')!;
 		this.cache = new Map();
-
-		/** Device pixel ratio (set by resize) */
 		this.dpr = 1;
 	}
 
@@ -51,12 +49,8 @@ export class HtmlCapture {
 
 	/**
 	 * Resize the hidden canvas to match the root element.
-	 *
-	 * @param {number} width   Width in physical (device) pixels.
-	 * @param {number} height  Height in physical (device) pixels.
-	 * @param {number} [dpr=1] Device pixel ratio.
 	 */
-	resize(width, height, dpr = 1) {
+	resize(width: number, height: number, dpr = 1): void {
 		this.canvas.width = width;
 		this.canvas.height = height;
 		this.dpr = dpr;
@@ -67,20 +61,14 @@ export class HtmlCapture {
 	/**
 	 * Capture a single DOM element onto the hidden canvas at its
 	 * correct position relative to the root.
-	 *
-	 * @param {HTMLElement} element  The element to capture.
-	 * @param {boolean}     force   If true, skip the cache.
-	 * @returns {Promise<void>}
 	 */
-	async captureElement(element, force = false) {
+	async captureElement(element: HTMLElement, force = false): Promise<void> {
 		const rootRect = this.root.getBoundingClientRect();
 		const rect = element.getBoundingClientRect();
-		// CSS-pixel coordinates relative to root
 		const cssX = rect.left - rootRect.left;
 		const cssY = rect.top - rootRect.top;
 		const cssW = rect.width;
 		const cssH = rect.height;
-		// Physical-pixel coordinates for the DPR-scaled hidden canvas
 		const x = cssX * this.dpr;
 		const y = cssY * this.dpr;
 		const w = cssW * this.dpr;
@@ -88,19 +76,17 @@ export class HtmlCapture {
 
 		// Use cache for static elements
 		if (!force && this.cache.has(element)) {
-			const cached = this.cache.get(element);
-			// If position / size hasn't changed, blit from cache
+			const cached = this.cache.get(element)!;
 			if (cached.x === x && cached.y === y && cached.w === w && cached.h === h) {
 				this.ctx.drawImage(cached.canvas, x, y, w, h);
 				return;
 			}
-			// Position changed — re-capture
 			this.cache.delete(element);
 		}
 
 		// Check if the element is a <canvas> — draw it directly
 		if (element.tagName === 'CANVAS') {
-			this.ctx.drawImage(element, x, y, w, h);
+			this.ctx.drawImage(element as HTMLCanvasElement, x, y, w, h);
 			return;
 		}
 
@@ -119,16 +105,14 @@ export class HtmlCapture {
 	 * init) so that the brief display:none on hideNodes is not visible
 	 * to the user.  The returned canvas can then be blitted synchronously
 	 * inside the render loop via drawImage.
-	 *
-	 * @param {HTMLElement}        element     The element to capture.
-	 * @param {number}             cssW        Width in CSS pixels.
-	 * @param {number}             cssH        Height in CSS pixels.
-	 * @param {HTMLElement[]|null} hideNodes   Children to hide during capture.
-	 * @returns {Promise<HTMLCanvasElement|null>}  The captured canvas, or null on error.
 	 */
-	async captureToCanvas(element, cssW, cssH, hideNodes = null) {
-		// Hide specified child nodes before capture
-		const savedDisplays = [];
+	async captureToCanvas(
+		element: HTMLElement,
+		cssW: number,
+		cssH: number,
+		hideNodes: HTMLElement[] | null = null,
+	): Promise<HTMLCanvasElement | null> {
+		const savedDisplays: string[] = [];
 		if (hideNodes) {
 			for (const node of hideNodes) {
 				savedDisplays.push(node.style.display);
@@ -137,17 +121,11 @@ export class HtmlCapture {
 		}
 
 		try {
-			// Override position-related styles on the CLONE (not the
-			// live element).  html-to-image inlines all computed styles
-			// onto the clone — including absolute positioning offsets
-			// (top/left/right/bottom) and transforms — which cause the
-			// content to render outside the SVG foreignObject's bounds.
-			// Resetting them to neutral values keeps content in-frame.
 			const rendered = await toCanvas(element, {
 				width: cssW,
 				height: cssH,
 				pixelRatio: this.dpr,
-				backgroundColor: null,
+				backgroundColor: undefined,
 				style: {
 					position: 'static',
 					top: 'auto',
@@ -163,7 +141,6 @@ export class HtmlCapture {
 			console.warn('LiquidGlass: captureToCanvas failed for element:', element, err);
 			return null;
 		} finally {
-			// Restore hidden nodes
 			if (hideNodes) {
 				for (let i = 0; i < hideNodes.length; i++) {
 					hideNodes[i].style.display = savedDisplays[i];
@@ -174,23 +151,18 @@ export class HtmlCapture {
 
 	/**
 	 * Remove an element's entry from the capture cache.
-	 *
-	 * @param {HTMLElement} element
 	 */
-	invalidateCache(element) {
+	invalidateCache(element: HTMLElement): void {
 		this.cache.delete(element);
 	}
 
 	/**
 	 * Blit a cached capture onto the hidden canvas without re-capturing.
 	 * Returns true if a cache entry existed, false otherwise.
-	 *
-	 * @param {HTMLElement} element
-	 * @returns {boolean}
 	 */
-	blitFromCache(element) {
-		if (this.cache.has(element)) {
-			const cached = this.cache.get(element);
+	blitFromCache(element: HTMLElement): boolean {
+		const cached = this.cache.get(element);
+		if (cached) {
 			this.ctx.drawImage(cached.canvas, cached.x, cached.y, cached.w, cached.h);
 			return true;
 		}
@@ -200,28 +172,24 @@ export class HtmlCapture {
 	/**
 	 * Draw a rendered glass canvas onto the hidden canvas (for layered
 	 * compositing — higher glass elements need to see lower ones).
-	 *
-	 * @param {HTMLCanvasElement} glassCanvas  The glass element's child canvas.
-	 * @param {number} x      X position in physical pixels.
-	 * @param {number} y      Y position in physical pixels.
-	 * @param {number} w      Width in physical pixels.
-	 * @param {number} h      Height in physical pixels.
 	 */
-	compositeGlass(glassCanvas, x, y, w, h) {
+	compositeGlass(
+		glassCanvas: HTMLCanvasElement,
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+	): void {
 		this.ctx.drawImage(glassCanvas, 0, 0, glassCanvas.width, glassCanvas.height, x, y, w, h);
 	}
 
-	/**
-	 * Clear the hidden canvas.
-	 */
-	clear() {
+	/** Clear the hidden canvas. */
+	clear(): void {
 		this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 	}
 
-	/**
-	 * Destroy the capture system and free resources.
-	 */
-	destroy() {
+	/** Destroy the capture system and free resources. */
+	destroy(): void {
 		this.cache.clear();
 		this.canvas.remove();
 	}
@@ -230,19 +198,16 @@ export class HtmlCapture {
 	// html-to-image back-end (default)
 	// ────────────────────────────────────────────
 
-	/**
-	 * Capture an element using the `html-to-image` library.
-	 *
-	 * @param {HTMLElement}  element  The DOM element to capture.
-	 * @param {number}       x       Destination X in physical pixels.
-	 * @param {number}       y       Destination Y in physical pixels.
-	 * @param {number}       w       Destination width in physical pixels.
-	 * @param {number}       h       Destination height in physical pixels.
-	 * @param {number}       cssW    Element width in CSS pixels.
-	 * @param {number}       cssH    Element height in CSS pixels.
-	 * @param {boolean}      force   Skip cache.
-	 */
-	async _captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force) {
+	private async _captureWithHtmlToImage(
+		element: HTMLElement,
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+		cssW: number,
+		cssH: number,
+		force: boolean,
+	): Promise<void> {
 		try {
 			const rendered = await toCanvas(element, {
 				width: cssW,
@@ -250,10 +215,8 @@ export class HtmlCapture {
 				pixelRatio: this.dpr,
 			});
 
-			// Draw the rendered canvas onto the hidden accumulation canvas
 			this.ctx.drawImage(rendered, x, y, w, h);
 
-			// Cache for static elements
 			if (!force) {
 				this.cache.set(element, { canvas: rendered, x, y, w, h });
 			}
@@ -266,27 +229,26 @@ export class HtmlCapture {
 	// html-in-canvas API back-end (experimental)
 	// ────────────────────────────────────────────
 
-	/**
-	 * Capture an element using the proposed html-in-canvas API.
-	 * Falls back to html-to-image if the API is unavailable.
-	 *
-	 * @param {HTMLElement} element  The DOM element to capture.
-	 * @param {number} x      Destination X in physical pixels.
-	 * @param {number} y      Destination Y in physical pixels.
-	 * @param {number} w      Destination width in physical pixels.
-	 * @param {number} h      Destination height in physical pixels.
-	 * @param {number} cssW   Element width in CSS pixels.
-	 * @param {number} cssH   Element height in CSS pixels.
-	 * @param {boolean} force Skip cache.
-	 * @see https://github.com/nickochar/html-in-canvas-proposal
-	 */
-	async _captureWithHtmlApi(element, x, y, w, h, cssW, cssH, force) {
-		if (typeof this.ctx.drawHTML === 'function') {
+	private async _captureWithHtmlApi(
+		element: HTMLElement,
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+		cssW: number,
+		cssH: number,
+		force: boolean,
+	): Promise<void> {
+		const ctx = this.ctx as CanvasRenderingContext2D & {
+			drawHTML?: (el: HTMLElement, x: number, y: number, w: number, h: number) => Promise<void>;
+		};
+
+		if (typeof ctx.drawHTML === 'function') {
 			this.ctx.save();
 			this.ctx.translate(x, y);
 			this.ctx.scale(this.dpr, this.dpr);
 			try {
-				await this.ctx.drawHTML(element, 0, 0, cssW, cssH);
+				await ctx.drawHTML(element, 0, 0, cssW, cssH);
 			} catch (_err) {
 				this.ctx.restore();
 				await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
