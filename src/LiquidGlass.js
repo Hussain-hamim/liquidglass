@@ -63,6 +63,13 @@ export class LiquidGlass {
 		/** WebGL glass renderer */
 		this.renderer = new GlassRenderer();
 
+		// When the WebGL context is restored, invalidate all caches so
+		// the render loop rebuilds everything on the next frame.
+		this.renderer.canvas.addEventListener('webglcontextrestored', () => {
+			this._glassCache.clear();
+			this._dirty = true;
+		});
+
 		/** Whether the render loop is active */
 		this._running = false;
 
@@ -89,6 +96,9 @@ export class LiquidGlass {
 		/** Flag: needs full re-capture */
 		this._dirty = true;
 
+		/** Guard: true while _captureGlassContent is running */
+		this._capturingGlassContent = false;
+
 		/** MutationObserver for DOM changes */
 		this._observer = null;
 
@@ -109,6 +119,12 @@ export class LiquidGlass {
 		 * @type {Map<HTMLElement, HTMLCanvasElement>}
 		 */
 		this._glassContentImages = new Map();
+
+		/**
+		 * Last known size of each glass element, used to detect resize.
+		 * @type {Map<HTMLElement, {w: number, h: number}>}
+		 */
+		this._glassLastSize = new Map();
 	}
 
 	// ────────────────────────────────────────────
@@ -200,6 +216,7 @@ export class LiquidGlass {
 		this.glassCanvases.clear();
 		this._glassCache.clear();
 		this._glassContentImages.clear();
+		this._glassLastSize.clear();
 
 		this.capture.destroy();
 		this.renderer.destroy();
@@ -253,20 +270,34 @@ export class LiquidGlass {
 	 * This runs OUTSIDE the render loop — the brief display:none on the
 	 * injected canvases is either invisible (before first paint) or
 	 * imperceptible (single-shot re-capture triggered by mutation).
+	 *
+	 * Guarded against concurrent execution: if a capture is already in
+	 * progress, the flag is re-set so a fresh capture runs after the
+	 * current one completes.
 	 */
 	async _captureGlassContent() {
-		const dpr = window.devicePixelRatio || 1;
-		for (const [el, glassCanvas] of this.glassCanvases) {
-			const rect = el.getBoundingClientRect();
-			const img = await this.capture.captureToCanvas(
-				el,
-				rect.width,
-				rect.height,
-				[glassCanvas],
-			);
-			if (img) {
-				this._glassContentImages.set(el, img);
+		if (this._capturingGlassContent) {
+			// Another capture is in flight — re-set the dirty flag so
+			// the render loop will retry once the current one finishes.
+			this._glassContentDirty = true;
+			return;
+		}
+		this._capturingGlassContent = true;
+		try {
+			for (const [el, glassCanvas] of this.glassCanvases) {
+				const rect = el.getBoundingClientRect();
+				const img = await this.capture.captureToCanvas(
+					el,
+					rect.width,
+					rect.height,
+					[glassCanvas],
+				);
+				if (img) {
+					this._glassContentImages.set(el, img);
+				}
 			}
+		} finally {
+			this._capturingGlassContent = false;
 		}
 	}
 
@@ -359,26 +390,68 @@ export class LiquidGlass {
 		this.renderer.resize(w, h);
 
 		// Resize each glass element's canvas
-		for (const [el, canvas] of this.glassCanvases) {
-			const elRect = el.getBoundingClientRect();
-			const padW = SHADOW_PAD * 2;
-			const padH = SHADOW_PAD * 2;
-			canvas.width = Math.round((elRect.width + padW) * dpr);
-			canvas.height = Math.round((elRect.height + padH) * dpr);
-			canvas.style.cssText = [
-				'position:absolute',
-				`left:${-SHADOW_PAD}px`,
-				`top:${-SHADOW_PAD}px`,
-				`width:${elRect.width + padW}px`,
-				`height:${elRect.height + padH}px`,
-				'pointer-events:none',
-			].join(';') + ';';
+		for (const el of this.glassSet) {
+			this._updateGlassCanvasSize(el);
 		}
 
 		this._glassCache.clear();
 		// Glass content images need re-capture at new size
 		this._glassContentDirty = true;
 		this._dirty = true;
+	}
+
+	/**
+	 * Update a glass element's child canvas dimensions and position
+	 * to match its current bounding rect (+ shadow padding).
+	 *
+	 * @param {HTMLElement} el  The glass element.
+	 */
+	_updateGlassCanvasSize(el) {
+		const canvas = this.glassCanvases.get(el);
+		if (!canvas) return;
+		const dpr = window.devicePixelRatio || 1;
+		const elRect = el.getBoundingClientRect();
+		const padW = SHADOW_PAD * 2;
+		const padH = SHADOW_PAD * 2;
+		canvas.width = Math.round((elRect.width + padW) * dpr);
+		canvas.height = Math.round((elRect.height + padH) * dpr);
+		canvas.style.cssText = [
+			'position:absolute',
+			`left:${-SHADOW_PAD}px`,
+			`top:${-SHADOW_PAD}px`,
+			`width:${elRect.width + padW}px`,
+			`height:${elRect.height + padH}px`,
+			'pointer-events:none',
+		].join(';') + ';';
+		this._glassLastSize.set(el, { w: elRect.width, h: elRect.height });
+	}
+
+	/**
+	 * Check all glass elements for size changes and update their
+	 * canvases if needed.  Called at the top of each frame.
+	 *
+	 * @returns {boolean}  True if any glass element was resized.
+	 */
+	_checkGlassSizeChanges() {
+		let changed = false;
+		for (const el of this.glassSet) {
+			const elRect = el.getBoundingClientRect();
+			const last = this._glassLastSize.get(el);
+			if (!last
+				|| Math.abs(last.w - elRect.width) > 0.5
+				|| Math.abs(last.h - elRect.height) > 0.5
+			) {
+				this._updateGlassCanvasSize(el);
+				// Invalidate this element's shader and content caches
+				this._glassCache.delete(el);
+				this.capture.invalidateCache(el);
+				changed = true;
+			}
+		}
+		if (changed) {
+			this._glassContentDirty = true;
+		}
+		return changed;
 	}
 
 	// ────────────────────────────────────────────
@@ -471,6 +544,13 @@ export class LiquidGlass {
 	 */
 	_renderLoop() {
 		if (!this._running) return;
+
+		// Check if any glass element changed size (e.g. CSS animation,
+		// responsive layout, programmatic style change).  If so, update
+		// its child canvas dimensions and mark caches dirty.
+		if (this._checkGlassSizeChanges()) {
+			this._dirty = true;
+		}
 
 		// If glass DOM content changed (mutation observer), re-capture
 		// it asynchronously.  This is a one-shot operation that runs
@@ -582,35 +662,58 @@ export class LiquidGlass {
 
 			} else {
 				// ── Non-glass element ─────────────────────────────
-				// <canvas> elements are drawn synchronously via
-				// ctx.drawImage (fast path in captureElement).
-				// Other elements use the html-to-image cache.
-				// Dynamic non-canvas elements use force=true which
-				// triggers an async html-to-image call — but that
-				// resolves within this tick for already-cached items.
 				const isDynamic = child.hasAttribute('data-dynamic');
+				const tag = child.tagName;
 
-				if (child.tagName === 'CANVAS') {
-					// Sync fast path: draw the live canvas directly
-					const rootR = this.root.getBoundingClientRect();
+				// Sync fast paths: <canvas>, <img>, and <video>
+				// are drawn directly via ctx.drawImage — no
+				// html-to-image overhead, no async, no cache miss
+				// on the first frame after resize.
+				if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') {
 					const r = child.getBoundingClientRect();
-					const x = (r.left - rootR.left) * dpr;
-					const y = (r.top - rootR.top) * dpr;
-					const w = r.width * dpr;
-					const h = r.height * dpr;
-					this.capture.ctx.drawImage(child, x, y, w, h);
+					const dx = (r.left - rootRect.left) * dpr;
+					const dy = (r.top - rootRect.top) * dpr;
+					const dw = r.width * dpr;
+					const dh = r.height * dpr;
+
+					if (tag === 'CANVAS') {
+						this.capture.ctx.drawImage(child, dx, dy, dw, dh);
+					} else {
+						// For <img>/<video>, respect object-fit/object-position
+						const natW = tag === 'IMG' ? child.naturalWidth : child.videoWidth;
+						const natH = tag === 'IMG' ? child.naturalHeight : child.videoHeight;
+
+						if (natW && natH) {
+							const computed = getComputedStyle(child);
+							const fit = computed.objectFit || 'fill';
+							const pos = computed.objectPosition || '50% 50%';
+
+							const src = LiquidGlass._objectFitRect(
+								natW, natH, r.width, r.height, fit, pos
+							);
+							this.capture.ctx.drawImage(
+								child,
+								src.sx, src.sy, src.sw, src.sh,
+								dx, dy, dw, dh
+							);
+						} else {
+							// Natural dimensions not yet available — draw stretched
+							this.capture.ctx.drawImage(child, dx, dy, dw, dh);
+						}
+					}
 					if (isDynamic) bgChanged = true;
 				} else if (!isDynamic) {
-					// Static non-canvas: blit from cache (populated
-					// on prior frame's async pass or first render)
+					// Static non-media: blit from cache (populated
+					// on a prior frame's async pass or first render)
 					if (!this.capture.blitFromCache(child)) {
 						// No cache yet — schedule async capture.
 						// It won't be ready THIS frame, but will be
 						// available from the next frame onwards.
 						this.capture.captureElement(child, false);
+						this._dirty = true;
 					}
 				} else {
-					// Dynamic non-canvas: must re-capture every frame.
+					// Dynamic non-media: must re-capture every frame.
 					// This is inherently async / expensive — schedule it.
 					this.capture.captureElement(child, true);
 					bgChanged = true;
@@ -636,5 +739,69 @@ export class LiquidGlass {
 		const compW = (elRect.width + SHADOW_PAD * 2) * dpr;
 		const compH = (elRect.height + SHADOW_PAD * 2) * dpr;
 		this.capture.compositeGlass(glassCanvas, compX, compY, compW, compH);
+	}
+
+	/**
+	 * Compute the source rectangle for drawImage that replicates CSS
+	 * object-fit / object-position behaviour.
+	 *
+	 * @param {number} natW   Natural (intrinsic) width of the media.
+	 * @param {number} natH   Natural (intrinsic) height of the media.
+	 * @param {number} boxW   Layout box width in CSS pixels.
+	 * @param {number} boxH   Layout box height in CSS pixels.
+	 * @param {string} fit    Computed object-fit value.
+	 * @param {string} pos    Computed object-position value (e.g. "50% 50%").
+	 * @returns {{sx:number, sy:number, sw:number, sh:number}}
+	 */
+	static _objectFitRect(natW, natH, boxW, boxH, fit, pos) {
+		// Default: use the entire source image
+		let sx = 0, sy = 0, sw = natW, sh = natH;
+
+		if (fit === 'fill' || fit === 'scale-down' && natW <= boxW && natH <= boxH) {
+			// fill: stretch source to box — use full source rect
+			return { sx, sy, sw, sh };
+		}
+
+		// Parse object-position into fractions (default 50% 50%)
+		const parts = pos.split(/\s+/);
+		const parseFrac = (v, total) => {
+			if (v.endsWith('%')) return parseFloat(v) / 100;
+			return parseFloat(v) / total;
+		};
+		const fx = parseFrac(parts[0] || '50%', boxW);
+		const fy = parseFrac(parts[1] || '50%', boxH);
+
+		if (fit === 'cover') {
+			// Scale image to cover box; crop overflow
+			const scale = Math.max(boxW / natW, boxH / natH);
+			sw = boxW / scale;
+			sh = boxH / scale;
+			sx = (natW - sw) * fx;
+			sy = (natH - sh) * fy;
+		} else if (fit === 'contain' || fit === 'scale-down') {
+			// contain: entire image visible, letterboxed. The visible
+			// portion of the BOX maps to a sub-region of source pixels
+			// only if we're told to draw the full box.  Since our
+			// destination rect already matches the element box, we need
+			// the inverse mapping: which part of the source maps onto
+			// the full destination.  For contain the entire source is
+			// visible, so use full source rect.
+			return { sx: 0, sy: 0, sw: natW, sh: natH };
+		}
+		// 'none' — draw at native size, centered per object-position
+		else if (fit === 'none') {
+			sw = boxW;
+			sh = boxH;
+			sx = (natW - sw) * fx;
+			sy = (natH - sh) * fy;
+		}
+
+		// Clamp to valid source bounds
+		sx = Math.max(0, Math.min(sx, natW - 1));
+		sy = Math.max(0, Math.min(sy, natH - 1));
+		sw = Math.min(sw, natW - sx);
+		sh = Math.min(sh, natH - sy);
+
+		return { sx, sy, sw, sh };
 	}
 }
