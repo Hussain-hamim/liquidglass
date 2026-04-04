@@ -138,6 +138,15 @@ export class GlassRenderer {
 	resize(width: number, height: number): void {
 		this.width = width;
 		this.height = height;
+		// Panel sizes change on resize — flush the FBO pool so stale
+		// entries don't accumulate and the canvas can shrink.
+		for (const fboSet of this.fboCache.values()) {
+			this._freeFBOSet(fboSet);
+		}
+		this.fboCache.clear();
+		this.activeFBOs = null;
+		this.canvas.width = 0;
+		this.canvas.height = 0;
 	}
 
 	// ────────────────────────────────────────────
@@ -154,7 +163,7 @@ export class GlassRenderer {
 	): void {
 		if (this.contextLost) return;
 		const gl = this.gl;
-		this._setActiveSize(width, height);
+		if (!this._setActiveSize(width, height)) return;
 		const W = this.width;
 		const H = this.height;
 		const fboSet = this.activeFBOs!;
@@ -307,7 +316,9 @@ export class GlassRenderer {
 	// FBO management
 	// ────────────────────────────────────────────
 
-	private _setActiveSize(w: number, h: number): void {
+	private _setActiveSize(w: number, h: number): boolean {
+		if (w <= 0 || h <= 0) return false;
+
 		this.width = w;
 		this.height = h;
 
@@ -327,6 +338,7 @@ export class GlassRenderer {
 			this.fboCache.set(key, fboSet);
 		}
 		this.activeFBOs = fboSet;
+		return true;
 	}
 
 	private _makeFBO(w: number, h: number): FBO {
