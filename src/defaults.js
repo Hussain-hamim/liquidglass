@@ -11,9 +11,9 @@ export const DEFAULTS = {
 	/** Refraction strength — how much the glass bends the image behind it */
 	refraction: 0.69,
 	/** Chromatic aberration — color fringing at edges */
-	chromAberration: 0.03,
+	chromAberration: 0.05,
 	/** Edge highlight intensity (inner glow / rim lighting) */
-	edgeHighlight: 0.21,
+	edgeHighlight: 0.05,
 	/** Specular highlight intensity (Blinn-Phong) */
 	specular: 0.00,
 	/** Fresnel reflection intensity at grazing angles */
