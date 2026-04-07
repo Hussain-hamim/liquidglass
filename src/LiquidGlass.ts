@@ -394,20 +394,15 @@ export class LiquidGlass {
 
 	private _getSortedChildren(): HTMLElement[] {
 		const children = Array.from(this.root.children) as HTMLElement[];
+		const rootDisplay = window.getComputedStyle(this.root).display;
+		const isFlexOrGridParent =
+			rootDisplay === 'flex' || rootDisplay === 'inline-flex' ||
+			rootDisplay === 'grid' || rootDisplay === 'inline-grid';
 
 		const tagged = children.map((el, domIndex) => {
 			const style = window.getComputedStyle(el);
-			const positioned = style.position !== 'static';
-			// Elements form a stacking context (and participate in z-index
-			// ordering) when positioned with an explicit z-index, or when
-			// certain CSS properties are set (opacity < 1, transform,
-			// filter, will-change, etc.).
-			const hasStackingContext = positioned
-				|| parseFloat(style.opacity) < 1
-				|| (style.transform !== 'none' && style.transform !== '')
-				|| (style.filter !== 'none' && style.filter !== '')
-				|| style.willChange === 'transform'
-				|| style.willChange === 'opacity';
+			const hasStackingContext =
+				LiquidGlass._formsStackingContext(style, isFlexOrGridParent);
 			const rawZ = parseInt(style.zIndex, 10);
 			const zIndex = isNaN(rawZ) ? 0 : rawZ;
 			return { el, domIndex, hasStackingContext, zIndex };
@@ -423,6 +418,56 @@ export class LiquidGlass {
 		});
 
 		return tagged.map(t => t.el);
+	}
+
+	/**
+	 * Returns true when the element forms a CSS stacking context — i.e.
+	 * when its z-index participates in painting order. Mirrors the spec:
+	 * https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context
+	 *
+	 * Used by `_getSortedChildren` to decide painting order on the
+	 * compositing canvas. The set of triggers needs to match the
+	 * browser's actual stacking model — otherwise overlays end up
+	 * painted before the background image and get erased.
+	 */
+	private static _formsStackingContext(
+		style: CSSStyleDeclaration,
+		isFlexOrGridParent: boolean,
+	): boolean {
+		if (style.position !== 'static') return true;
+		if (isFlexOrGridParent && style.zIndex !== 'auto') return true;
+		if (parseFloat(style.opacity) < 1) return true;
+		if (style.transform !== 'none' && style.transform !== '') return true;
+		if (style.filter !== 'none' && style.filter !== '') return true;
+		if (style.perspective !== 'none' && style.perspective !== '') return true;
+		if (style.clipPath !== 'none' && style.clipPath !== '') return true;
+		if (style.mixBlendMode !== 'normal' && style.mixBlendMode !== '') return true;
+		if (style.isolation === 'isolate') return true;
+
+		const bf = style.backdropFilter
+			|| (style as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter;
+		if (bf && bf !== 'none') return true;
+
+		const mask = style.maskImage
+			|| (style as unknown as { webkitMaskImage?: string }).webkitMaskImage;
+		if (mask && mask !== 'none') return true;
+
+		const contain = style.contain;
+		if (contain && /\b(layout|paint|strict|content)\b/.test(contain)) return true;
+
+		if (style.willChange) {
+			const triggers = new Set([
+				'transform', 'opacity', 'filter', 'backdrop-filter',
+				'perspective', 'clip-path', 'mask', 'mask-image',
+				'isolation', 'mix-blend-mode',
+			]);
+			const tokens = style.willChange.split(',').map(t => t.trim());
+			for (const t of tokens) {
+				if (triggers.has(t)) return true;
+			}
+		}
+
+		return false;
 	}
 
 	private _detectDynamic(): boolean {
