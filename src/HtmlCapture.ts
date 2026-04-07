@@ -25,6 +25,10 @@ export class HtmlCapture {
 	readonly ctx: CanvasRenderingContext2D;
 	readonly cache: Map<HTMLElement, CacheEntry>;
 	dpr: number;
+	/** Elements with an in-flight html-to-image re-capture (dedupe). */
+	private readonly _capturing = new Set<HTMLElement>();
+	/** Optional callback fired when an async re-capture finishes and the cache changes. */
+	onCacheUpdate: (() => void) | null = null;
 
 	constructor(root: HTMLElement) {
 		this.root = root;
@@ -54,49 +58,67 @@ export class HtmlCapture {
 	}
 
 	/**
-	 * Capture a single DOM element onto the hidden canvas at its
-	 * correct position relative to the root.
+	 * Draw an element onto the hidden compositing canvas at its current
+	 * bounding rect, ensuring the cache is fresh.
 	 *
 	 * Cache semantics:
-	 *   - Same size as cache → blit cached canvas at the CURRENT position
-	 *     (and update the stored x/y so future blits stay in sync). This
-	 *     handles layout shifts (font load, grid reflow, etc.) without
-	 *     async re-capture flicker.
-	 *   - Different size → drop the cache entry and re-capture.
+	 *   - Fresh hit (size matches within 0.5 px) → blit cached canvas
+	 *     at the current x/y. Done.
+	 *   - Stale hit (size differs) → blit cached canvas STRETCHED at
+	 *     the current x/y (better than a transparent gap), AND kick
+	 *     off an async re-capture. The stale entry stays in the cache
+	 *     until the new capture is ready to overwrite it; future
+	 *     frames keep blitting it stretched in the meantime.
+	 *   - Cache miss → kick off an async capture. Nothing is drawn
+	 *     this call; the caller should set _dirty so a future frame
+	 *     re-runs once the async completes.
+	 *
+	 * Concurrent re-captures for the same element are deduplicated
+	 * via the `_capturing` set, so calling this every frame is cheap.
 	 */
 	async captureElement(element: HTMLElement, force = false): Promise<void> {
 		const rootRect = this.root.getBoundingClientRect();
 		const rect = element.getBoundingClientRect();
-		const cssX = rect.left - rootRect.left;
-		const cssY = rect.top - rootRect.top;
 		const cssW = rect.width;
 		const cssH = rect.height;
-		const x = cssX * this.dpr;
-		const y = cssY * this.dpr;
+		const x = (rect.left - rootRect.left) * this.dpr;
+		const y = (rect.top - rootRect.top) * this.dpr;
 		const w = cssW * this.dpr;
 		const h = cssH * this.dpr;
 
-		if (!force && this.cache.has(element)) {
-			const cached = this.cache.get(element)!;
-			// Tolerant size comparison — getBoundingClientRect can vary
-			// by sub-pixel amounts between frames even when the layout
-			// hasn't actually changed.
-			if (Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5) {
-				this.ctx.drawImage(cached.canvas, x, y, w, h);
-				cached.x = x;
-				cached.y = y;
-				return;
-			}
-			this.cache.delete(element);
+		// Always blit any existing cache first — even if stale — so the
+		// compositing canvas never has a transparent hole at this
+		// element's location while async work runs in the background.
+		let cacheIsFresh = false;
+		const cached = this.cache.get(element);
+		if (cached) {
+			this.ctx.drawImage(cached.canvas, x, y, w, h);
+			cached.x = x;
+			cached.y = y;
+			cacheIsFresh =
+				Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5;
 		}
 
-		// Check if the element is a <canvas> — draw it directly
+		if (!force && cacheIsFresh) return;
+
+		// Dedupe concurrent re-captures for the same element. The
+		// previous in-flight call will overwrite the cache when done.
+		if (this._capturing.has(element)) return;
+
+		// Canvas elements are drawn directly via the fast path.
 		if (element.tagName === 'CANVAS') {
-			this.ctx.drawImage(element as HTMLCanvasElement, x, y, w, h);
+			if (!cached) {
+				this.ctx.drawImage(element as HTMLCanvasElement, x, y, w, h);
+			}
 			return;
 		}
 
-		await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
+		this._capturing.add(element);
+		try {
+			await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH);
+		} finally {
+			this._capturing.delete(element);
+		}
 	}
 
 	/**
@@ -157,33 +179,6 @@ export class HtmlCapture {
 	}
 
 	/**
-	 * Blit a cached capture onto the hidden canvas at the element's
-	 * CURRENT bounding rect, without re-capturing. Returns true if a
-	 * matching-size cache entry existed (and was blitted), false if the
-	 * cache was missing or had stale dimensions.
-	 */
-	blitFromCache(element: HTMLElement): boolean {
-		const cached = this.cache.get(element);
-		if (!cached) return false;
-
-		const rootRect = this.root.getBoundingClientRect();
-		const rect = element.getBoundingClientRect();
-		const x = (rect.left - rootRect.left) * this.dpr;
-		const y = (rect.top - rootRect.top) * this.dpr;
-		const w = rect.width * this.dpr;
-		const h = rect.height * this.dpr;
-
-		if (Math.abs(cached.w - w) >= 0.5 || Math.abs(cached.h - h) >= 0.5) {
-			return false;
-		}
-
-		this.ctx.drawImage(cached.canvas, x, y, w, h);
-		cached.x = x;
-		cached.y = y;
-		return true;
-	}
-
-	/**
 	 * Draw a rendered glass canvas onto the hidden canvas (for layered
 	 * compositing — higher glass elements need to see lower ones).
 	 */
@@ -221,7 +216,6 @@ export class HtmlCapture {
 		h: number,
 		cssW: number,
 		cssH: number,
-		force: boolean,
 	): Promise<void> {
 		try {
 			const rendered = await toCanvas(element, {
@@ -246,11 +240,12 @@ export class HtmlCapture {
 				fontEmbedCSS: '',
 			});
 
-			this.ctx.drawImage(rendered, x, y, w, h);
-
-			if (!force) {
-				this.cache.set(element, { canvas: rendered, x, y, w, h });
-			}
+			// Store the new render in the cache. Do NOT draw to ctx
+			// here — the next call to captureElement on a future render
+			// frame will blit the refreshed entry. Drawing here would
+			// be wasted work since the canvas is cleared every frame.
+			this.cache.set(element, { canvas: rendered, x, y, w, h });
+			this.onCacheUpdate?.();
 		} catch (err) {
 			console.warn('LiquidGlass: html-to-image capture failed for element:', element, err);
 		}

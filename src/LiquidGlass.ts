@@ -142,6 +142,11 @@ export class LiquidGlass {
 		this.glassSet = new Set(Array.from(glassElements || []));
 		this.glassCanvases = new Map();
 		this.capture = new HtmlCapture(root);
+		// When an async html-to-image re-capture finishes, mark dirty
+		// so the next frame picks up the refreshed cache. Without this,
+		// pages with no dynamic content would never re-render after a
+		// stale cache was refreshed in the background.
+		this.capture.onCacheUpdate = () => { this._dirty = true; };
 		this.renderer = new GlassRenderer();
 
 		// When the WebGL context is restored, invalidate all caches so
@@ -889,14 +894,17 @@ export class LiquidGlass {
 		// Also capture the wrapper's HTML content via html-to-image
 		// (for text, styled divs, etc.). This is additive — the media
 		// fast paths above already drew the video/img/canvas frames.
+		// captureElement always blits any cached canvas (stretched if
+		// the size has shifted), so the compositing canvas never has
+		// a transparent gap at the wrapper's location while async
+		// re-captures run in the background.
 		const isDynamic = child.hasAttribute('data-dynamic');
-		if (!isDynamic) {
-			if (!this.capture.blitFromCache(child)) {
-				this.capture.captureElement(child, false);
-				this._dirty = true;
-			}
-		} else {
-			this.capture.captureElement(child, true);
+		const hadCache = this.capture.cache.has(child);
+		this.capture.captureElement(child, isDynamic);
+		if (!hadCache) {
+			this._dirty = true;
+		}
+		if (isDynamic) {
 			bgChanged = true;
 		}
 
