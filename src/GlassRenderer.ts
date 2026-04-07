@@ -116,6 +116,7 @@ export class GlassRenderer {
 			'u_edgeHL', 'u_spec', 'u_fresnel', 'u_distort', 'u_alpha',
 			'u_sat', 'u_tint', 'u_zRadius', 'u_brightness',
 			'u_shadowAlpha', 'u_shadowSpread', 'u_shadowOffY',
+			'u_bevelMode',
 		]);
 	}
 
@@ -277,6 +278,7 @@ export class GlassRenderer {
 		gl.uniform1f(this.glassU.u_shadowAlpha, config.shadowOpacity);
 		gl.uniform1f(this.glassU.u_shadowSpread, config.shadowSpread * dpr);
 		gl.uniform1f(this.glassU.u_shadowOffY, config.shadowOffsetY * dpr);
+		gl.uniform1f(this.glassU.u_bevelMode, config.bevelMode);
 
 		this._drawQuad(this.glassP, this.panelBuf);
 		gl.disable(gl.BLEND);

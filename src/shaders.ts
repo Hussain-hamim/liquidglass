@@ -114,6 +114,7 @@ uniform float u_brightness;
 uniform float u_shadowAlpha;
 uniform float u_shadowSpread;
 uniform float u_shadowOffY;
+uniform float u_bevelMode;
 
 varying vec2 v_localPx;
 varying vec2 v_screenUV;
@@ -124,11 +125,15 @@ float rrSDF(vec2 p, vec2 b, float r) {
 	return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
 }
 
-// Pill (biconvex) bevel height field — cross-section is a half-circle.
+// Bevel height field.
+// Both modes use the same half-circle profile (smooth peak at centre,
+// steep at edges).  The difference is in the refraction model:
+//   mode 0 = biconvex pill — light refracts at both surfaces (entry + exit).
+//   mode 1 = dome (plano-convex) — flat bottom, so only exit refraction.
 // d = distance inside from edge (-sdf), zR = z-radius of the bevel.
 float bevelHeight(float d, float zR) {
-	if (d >= zR) return zR;
 	if (d <= 0.0) return 0.0;
+	if (d >= zR) return zR;
 	return sqrt(d * (2.0 * zR - d));
 }
 
@@ -179,18 +184,26 @@ void main() {
 
 	float depth = smoothstep(0.0, zR, inside);
 
-	// ── Dual-surface refraction (biconvex pill) ──
+	// ── Refraction ──
 	vec2 pxToUV = vec2(1.0, -1.0) / u_res;
 	float ior = 1.5;
 	float refrPow = 1.0 - 1.0 / ior;
 	float thickness = hC * 2.0;
 	float thickNorm = thickness / max(zR * 2.0, 1.0);
-	vec2 exitRefr = hGrad * refrPow;
-	vec2 entryRefr = hGrad * refrPow;
-	vec2 throughRefr = entryRefr * thickNorm * 0.5;
-	vec2 refrPx = (exitRefr + entryRefr + throughRefr) * u_refract * 30.0;
-	vec2 centerDir = -v_localPx / max(half_, vec2(1.0));
-	refrPx += centerDir * u_refract * 4.0 * depth;
+	vec2 refrPx;
+	if (u_bevelMode < 0.5) {
+		// Biconvex: physically-based dual-surface refraction
+		vec2 exitRefr = hGrad * refrPow;
+		vec2 entryRefr = hGrad * refrPow;
+		vec2 throughRefr = entryRefr * thickNorm * 0.5;
+		refrPx = (exitRefr + entryRefr + throughRefr) * u_refract * 30.0;
+		vec2 centerDir = -v_localPx / max(half_, vec2(1.0));
+		refrPx += centerDir * u_refract * 4.0 * depth;
+	} else {
+		// Dome (plano-convex): uniform magnification by contracting UV toward center.
+		// Each pixel samples from closer to center → content appears larger.
+		refrPx = -v_localPx * u_refract * depth * 0.35;
+	}
 	vec2 refr = refrPx * pxToUV;
 
 	// ── Micro-distortion noise ──

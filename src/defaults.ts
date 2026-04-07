@@ -42,6 +42,14 @@ export interface GlassConfig {
 	shadowOffsetY: number;
 	/** Whether this glass element can be dragged around (Pointer Events) */
 	floating: boolean;
+	/** Whether this glass element behaves as a button (hover lift + press effect) */
+	button: boolean;
+	/**
+	 * Bevel mode: 0 = biconvex pill (half-circle cross-section, default),
+	 * 1 = dome (flat bottom, quarter-circle top — use with cornerRadius = zRadius
+	 * for a perfect half-sphere magnifier effect).
+	 */
+	bevelMode: number;
 }
 
 export const DEFAULTS: GlassConfig = {
@@ -63,6 +71,8 @@ export const DEFAULTS: GlassConfig = {
 	shadowSpread: 10,
 	shadowOffsetY: 1,
 	floating: false,
+	button: false,
+	bevelMode: 0,
 };
 
 /** Number of Gaussian blur passes (higher = smoother but slower) */
