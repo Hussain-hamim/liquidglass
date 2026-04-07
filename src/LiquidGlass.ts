@@ -26,15 +26,15 @@ export interface LiquidGlassOptions {
 	glassElements?: NodeListOf<HTMLElement> | HTMLElement[];
 	/** Override the default configuration values. */
 	defaults?: Partial<GlassConfig>;
-	/** Use experimental html-in-canvas API. */
-	useHtmlInCanvas?: boolean;
 }
 
 interface DragState {
 	active: boolean;
 	element: HTMLElement | null;
-	offsetX: number;
-	offsetY: number;
+	startX: number;
+	startY: number;
+	origTx: number;
+	origTy: number;
 }
 
 interface GlassCacheEntry {
@@ -57,6 +57,19 @@ interface ObjectFitRect {
 	sy: number;
 	sw: number;
 	sh: number;
+}
+
+const BUTTON_CLASS = 'liquid-glass-button';
+const STYLE_ID = 'liquid-glass-button-styles';
+const BUTTON_CSS = `
+.${BUTTON_CLASS} {
+	cursor: pointer;
+}
+`;
+
+interface ButtonState {
+	hover: boolean;
+	pressed: boolean;
 }
 
 export class LiquidGlass {
@@ -100,12 +113,16 @@ export class LiquidGlass {
 	private readonly _glassCache = new Map<HTMLElement, GlassCacheEntry>();
 	private readonly _glassContentImages = new Map<HTMLElement, HTMLCanvasElement>();
 	private readonly _glassLastSize = new Map<HTMLElement, SizeEntry>();
+	private readonly _buttonStates = new Map<HTMLElement, ButtonState>();
+	private readonly _buttonListeners = new Map<HTMLElement, Array<() => void>>();
 
 	private readonly _drag: DragState = {
 		active: false,
 		element: null,
-		offsetX: 0,
-		offsetY: 0,
+		startX: 0,
+		startY: 0,
+		origTx: 0,
+		origTy: 0,
 	};
 
 	private readonly _onResize: () => void;
@@ -117,14 +134,14 @@ export class LiquidGlass {
 	// Constructor (prefer LiquidGlass.init)
 	// ────────────────────────────────────────────
 
-	constructor({ root, glassElements, defaults = {}, useHtmlInCanvas = false }: LiquidGlassOptions) {
+	constructor({ root, glassElements, defaults = {} }: LiquidGlassOptions) {
 		if (!root) throw new Error('LiquidGlass: `root` element is required.');
 
 		this.root = root;
 		this.defaults = { ...DEFAULTS, ...defaults };
 		this.glassSet = new Set(Array.from(glassElements || []));
 		this.glassCanvases = new Map();
-		this.capture = new HtmlCapture(root, useHtmlInCanvas);
+		this.capture = new HtmlCapture(root);
 		this.renderer = new GlassRenderer();
 
 		// When the WebGL context is restored, invalidate all caches so
@@ -145,6 +162,8 @@ export class LiquidGlass {
 	// ────────────────────────────────────────────
 
 	private async _start(): Promise<void> {
+		this.root.style.userSelect = 'none';
+		(this.root.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = 'none';
 		this._setupGlassElements();
 		this._hasDynamic = this._detectDynamic();
 		this._sortedChildren = this._getSortedChildren();
@@ -192,6 +211,9 @@ export class LiquidGlass {
 		this._running = false;
 		cancelAnimationFrame(this._rafId);
 
+		this.root.style.removeProperty('user-select');
+		this.root.style.removeProperty('-webkit-user-select');
+
 		window.removeEventListener('resize', this._onResize);
 		this.root.removeEventListener('pointerdown', this._onPointerDown);
 		window.removeEventListener('pointermove', this._onPointerMove);
@@ -206,11 +228,21 @@ export class LiquidGlass {
 			canvas.remove();
 			el.style.removeProperty('position');
 			el.style.removeProperty('overflow');
+			el.style.removeProperty('touch-action');
+			el.classList.remove(BUTTON_CLASS);
 		}
 		this.glassCanvases.clear();
 		this._glassCache.clear();
 		this._glassContentImages.clear();
 		this._glassLastSize.clear();
+
+		for (const removers of this._buttonListeners.values()) {
+			for (const r of removers) r();
+		}
+		this._buttonListeners.clear();
+		this._buttonStates.clear();
+
+		document.getElementById(STYLE_ID)?.remove();
 
 		this.capture.destroy();
 		this.renderer.destroy();
@@ -221,9 +253,12 @@ export class LiquidGlass {
 	// ────────────────────────────────────────────
 
 	private _setupGlassElements(): void {
+		let needsButtonStyles = false;
+
 		for (const el of this.glassSet) {
+			// Glass elements must be direct children of the root.
 			if (el.parentElement !== this.root) {
-				console.warn('LiquidGlass: glass element is not a direct child of root, skipping.', el);
+				console.warn('LiquidGlass: glass element must be a direct child of root, skipping.', el);
 				this.glassSet.delete(el);
 				continue;
 			}
@@ -234,12 +269,60 @@ export class LiquidGlass {
 			}
 			el.style.overflow = 'visible';
 
+			const config = this._getConfig(el);
+
+			// Prevent browser from hijacking pointer events for
+			// scroll/pan on floating (draggable) glass elements.
+			if (config.floating) {
+				el.style.touchAction = 'none';
+			}
+
+			// Button mode — cursor + hover/press shader-state listeners
+			if (config.button) {
+				el.classList.add(BUTTON_CLASS);
+				needsButtonStyles = true;
+				this._setupButtonListeners(el);
+			}
+
 			const canvas = document.createElement('canvas');
 			canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
 			el.insertBefore(canvas, el.firstChild);
 
 			this.glassCanvases.set(el, canvas);
 		}
+
+		// Inject button styles once if any glass element uses button mode
+		if (needsButtonStyles && !document.getElementById(STYLE_ID)) {
+			const style = document.createElement('style');
+			style.id = STYLE_ID;
+			style.textContent = BUTTON_CSS;
+			document.head.appendChild(style);
+		}
+
+	}
+
+	private _setupButtonListeners(el: HTMLElement): void {
+		const state: ButtonState = { hover: false, pressed: false };
+		this._buttonStates.set(el, state);
+
+		const onOver = () => { state.hover = true; this._dirty = true; };
+		const onOut = () => { state.hover = false; state.pressed = false; this._dirty = true; };
+		const onDown = () => { state.pressed = true; this._dirty = true; };
+		const onUp = () => { state.pressed = false; this._dirty = true; };
+
+		el.addEventListener('pointerover', onOver);
+		el.addEventListener('pointerout', onOut);
+		el.addEventListener('pointerdown', onDown);
+		el.addEventListener('pointerup', onUp);
+		el.addEventListener('pointercancel', onUp);
+
+		this._buttonListeners.set(el, [
+			() => el.removeEventListener('pointerover', onOver),
+			() => el.removeEventListener('pointerout', onOut),
+			() => el.removeEventListener('pointerdown', onDown),
+			() => el.removeEventListener('pointerup', onUp),
+			() => el.removeEventListener('pointercancel', onUp),
+		]);
 	}
 
 	// ────────────────────────────────────────────
@@ -289,14 +372,25 @@ export class LiquidGlass {
 		const tagged = children.map((el, domIndex) => {
 			const style = window.getComputedStyle(el);
 			const positioned = style.position !== 'static';
-			const zIndex = positioned ? parseInt(style.zIndex, 10) || 0 : 0;
-			return { el, domIndex, positioned, zIndex };
+			// Elements form a stacking context (and participate in z-index
+			// ordering) when positioned with an explicit z-index, or when
+			// certain CSS properties are set (opacity < 1, transform,
+			// filter, will-change, etc.).
+			const hasStackingContext = positioned
+				|| parseFloat(style.opacity) < 1
+				|| (style.transform !== 'none' && style.transform !== '')
+				|| (style.filter !== 'none' && style.filter !== '')
+				|| style.willChange === 'transform'
+				|| style.willChange === 'opacity';
+			const rawZ = parseInt(style.zIndex, 10);
+			const zIndex = isNaN(rawZ) ? 0 : rawZ;
+			return { el, domIndex, hasStackingContext, zIndex };
 		});
 
 		tagged.sort((a, b) => {
-			if (!a.positioned && b.positioned) return -1;
-			if (a.positioned && !b.positioned) return 1;
-			if (a.positioned && b.positioned) {
+			if (!a.hasStackingContext && b.hasStackingContext) return -1;
+			if (a.hasStackingContext && !b.hasStackingContext) return 1;
+			if (a.hasStackingContext && b.hasStackingContext) {
 				if (a.zIndex !== b.zIndex) return a.zIndex - b.zIndex;
 			}
 			return a.domIndex - b.domIndex;
@@ -306,8 +400,18 @@ export class LiquidGlass {
 	}
 
 	private _detectDynamic(): boolean {
-		for (const child of Array.from(this.root.children) as HTMLElement[]) {
-			if (!this.glassSet.has(child) && child.hasAttribute('data-dynamic')) {
+		// Check the entire subtree for data-dynamic elements
+		// (video with data-dynamic, etc.).
+		const dynEls = this.root.querySelectorAll('[data-dynamic]');
+		for (const el of dynEls) {
+			if (!this.glassSet.has(el as HTMLElement)) {
+				return true;
+			}
+		}
+		// Also: any video element is implicitly dynamic (live frames).
+		const videos = this.root.querySelectorAll('video');
+		for (const vid of videos) {
+			if (!this.glassSet.has(vid as unknown as HTMLElement)) {
 				return true;
 			}
 		}
@@ -340,7 +444,22 @@ export class LiquidGlass {
 			cachedEl.configCacheKey = configKey;
 		}
 
-		return { ...this.defaults, ...(cachedEl.configCache || {}) };
+		const config = { ...this.defaults, ...(cachedEl.configCache || {}) };
+
+		if (config.button) {
+			const state = this._buttonStates.get(el);
+			if (state) {
+				if (state.pressed) {
+					config.zRadius = config.zRadius * 0.8;
+					config.shadowSpread = config.shadowSpread * 1.2;
+					// brightness reset to original (no hover boost)
+				} else if (state.hover) {
+					config.brightness = config.brightness + 0.2;
+				}
+			}
+		}
+
+		return config;
 	}
 
 	// ────────────────────────────────────────────
@@ -369,30 +488,37 @@ export class LiquidGlass {
 		const canvas = this.glassCanvases.get(el);
 		if (!canvas) return;
 		const dpr = window.devicePixelRatio || 1;
-		const elRect = el.getBoundingClientRect();
+		// Use offsetWidth/Height — the CSS box size before transforms.
+		// This prevents button hover scale from inflating the canvas.
+		const elW = el.offsetWidth;
+		const elH = el.offsetHeight;
 		const padW = SHADOW_PAD * 2;
 		const padH = SHADOW_PAD * 2;
-		canvas.width = Math.round((elRect.width + padW) * dpr);
-		canvas.height = Math.round((elRect.height + padH) * dpr);
+		canvas.width = Math.round((elW + padW) * dpr);
+		canvas.height = Math.round((elH + padH) * dpr);
 		canvas.style.cssText = [
 			'position:absolute',
 			`left:${-SHADOW_PAD}px`,
 			`top:${-SHADOW_PAD}px`,
-			`width:${elRect.width + padW}px`,
-			`height:${elRect.height + padH}px`,
+			`width:${elW + padW}px`,
+			`height:${elH + padH}px`,
 			'pointer-events:none',
 		].join(';') + ';';
-		this._glassLastSize.set(el, { w: elRect.width, h: elRect.height });
+		this._glassLastSize.set(el, { w: elW, h: elH });
 	}
 
 	private _checkGlassSizeChanges(): boolean {
 		let changed = false;
 		for (const el of this.glassSet) {
-			const elRect = el.getBoundingClientRect();
+			// Use offsetWidth/Height instead of getBoundingClientRect so
+			// CSS transforms (e.g. button hover scale) don't trigger
+			// false size-change detections and render loops.
+			const w = el.offsetWidth;
+			const h = el.offsetHeight;
 			const last = this._glassLastSize.get(el);
 			if (!last
-				|| Math.abs(last.w - elRect.width) > 0.5
-				|| Math.abs(last.h - elRect.height) > 0.5
+				|| Math.abs(last.w - w) > 0.5
+				|| Math.abs(last.h - h) > 0.5
 			) {
 				this._updateGlassCanvasSize(el);
 				this._glassCache.delete(el);
@@ -410,7 +536,22 @@ export class LiquidGlass {
 	// Floating (drag) behaviour — Pointer Events
 	// ────────────────────────────────────────────
 
+	/** Parse the current translate(x, y) values from an element's transform. */
+	private static _getTranslateXY(el: HTMLElement): [number, number] {
+		const style = getComputedStyle(el);
+		const matrix = style.transform;
+		if (!matrix || matrix === 'none') return [0, 0];
+		// matrix(a, b, c, d, tx, ty)
+		const m = matrix.match(/matrix\(([^)]+)\)/);
+		if (m) {
+			const parts = m[1].split(',').map(Number);
+			return [parts[4] || 0, parts[5] || 0];
+		}
+		return [0, 0];
+	}
+
 	private _handlePointerDown(e: PointerEvent): void {
+		// Iterate all glass elements in reverse stacking order (topmost first).
 		for (let i = this._sortedChildren.length - 1; i >= 0; i--) {
 			const el = this._sortedChildren[i];
 			if (!this.glassSet.has(el)) continue;
@@ -419,21 +560,28 @@ export class LiquidGlass {
 			if (!config.floating) continue;
 
 			const rect = el.getBoundingClientRect();
-			if (
-				e.clientX >= rect.left && e.clientX <= rect.right &&
-				e.clientY >= rect.top && e.clientY <= rect.bottom
-			) {
-				const rootRect = this.root.getBoundingClientRect();
-				el.style.transform = 'none';
-				el.style.right = 'auto';
-				el.style.bottom = 'auto';
-				el.style.left = (rect.left - rootRect.left) + 'px';
-				el.style.top = (rect.top - rootRect.top) + 'px';
+			// Use the CSS box size (offsetWidth/Height) for hit testing,
+			// but use the bounding rect position (which is correct for
+			// elements positioned via CSS, grid, etc.).
+			const elW = el.offsetWidth;
+			const elH = el.offsetHeight;
+			// The visual position includes the shadow canvas overflow.
+			// Compute the element's true visual origin by centering the
+			// offset size within the bounding rect.
+			const visualLeft = rect.left + (rect.width - elW) / 2;
+			const visualTop = rect.top + (rect.height - elH) / 2;
 
+			if (
+				e.clientX >= visualLeft && e.clientX <= visualLeft + elW &&
+				e.clientY >= visualTop && e.clientY <= visualTop + elH
+			) {
+				const [tx, ty] = LiquidGlass._getTranslateXY(el);
 				this._drag.active = true;
 				this._drag.element = el;
-				this._drag.offsetX = e.clientX - rect.left;
-				this._drag.offsetY = e.clientY - rect.top;
+				this._drag.startX = e.clientX;
+				this._drag.startY = e.clientY;
+				this._drag.origTx = tx;
+				this._drag.origTy = ty;
 				el.style.cursor = 'grabbing';
 				el.setPointerCapture(e.pointerId);
 				e.preventDefault();
@@ -448,9 +596,13 @@ export class LiquidGlass {
 				const config = this._getConfig(el);
 				if (!config.floating) continue;
 				const rect = el.getBoundingClientRect();
+				const elW = el.offsetWidth;
+				const elH = el.offsetHeight;
+				const visualLeft = rect.left + (rect.width - elW) / 2;
+				const visualTop = rect.top + (rect.height - elH) / 2;
 				if (
-					e.clientX >= rect.left && e.clientX <= rect.right &&
-					e.clientY >= rect.top && e.clientY <= rect.bottom
+					e.clientX >= visualLeft && e.clientX <= visualLeft + elW &&
+					e.clientY >= visualTop && e.clientY <= visualTop + elH
 				) {
 					el.style.cursor = 'grab';
 				} else {
@@ -461,12 +613,34 @@ export class LiquidGlass {
 		}
 
 		const el = this._drag.element!;
-		const rootRect = this.root.getBoundingClientRect();
-		const newLeft = e.clientX - rootRect.left - this._drag.offsetX;
-		const newTop = e.clientY - rootRect.top - this._drag.offsetY;
+		const dx = e.clientX - this._drag.startX;
+		const dy = e.clientY - this._drag.startY;
+		let newTx = this._drag.origTx + dx;
+		let newTy = this._drag.origTy + dy;
 
-		el.style.left = newLeft + 'px';
-		el.style.top = newTop + 'px';
+		// Constrain within root bounds with margin.
+		// For nested elements, offsetLeft/Top is relative to offsetParent
+		// (which may not be root). Use getBoundingClientRect to compute
+		// the element's position relative to root, then subtract the
+		// current translate to get the base (CSS layout) position.
+		const rootRect = this.root.getBoundingClientRect();
+		const elW = el.offsetWidth;
+		const elH = el.offsetHeight;
+		const elRect = el.getBoundingClientRect();
+		const [curTx, curTy] = LiquidGlass._getTranslateXY(el);
+		const baseLeft = (elRect.left + (elRect.width - elW) / 2) - rootRect.left - curTx;
+		const baseTop = (elRect.top + (elRect.height - elH) / 2) - rootRect.top - curTy;
+		const margin = 10;
+		const posLeft = baseLeft + newTx;
+		const posTop = baseTop + newTy;
+		const maxLeft = rootRect.width - elW - margin;
+		const maxTop = rootRect.height - elH - margin;
+		if (posLeft < margin) newTx += margin - posLeft;
+		if (posTop < margin) newTy += margin - posTop;
+		if (posLeft > maxLeft) newTx -= posLeft - maxLeft;
+		if (posTop > maxTop) newTy -= posTop - maxTop;
+
+		el.style.transform = `translate(${newTx}px, ${newTy}px)`;
 
 		this._dirty = true;
 	}
@@ -527,121 +701,214 @@ export class LiquidGlass {
 
 		for (const child of this._sortedChildren) {
 			if (this.glassSet.has(child)) {
-				// ── Glass element ──────────────────────────────────
-				const config = this._getConfig(child);
-				const elRect = child.getBoundingClientRect();
-				const centerX = (elRect.left - rootRect.left) + elRect.width / 2;
-				const centerY = (elRect.top - rootRect.top) + elRect.height / 2;
-				const glassCanvas = this.glassCanvases.get(child);
-				const isBeingDragged = isDragging && this._drag.element === child;
-
-				const cached = this._glassCache.get(child);
-				const posChanged = !cached
-					|| Math.abs(cached.centerX - centerX) > 0.5
-					|| Math.abs(cached.centerY - centerY) > 0.5;
-
-				const needsShaderRender = isDragging
-					? (isBeingDragged || bgChanged)
-					: (!cached || posChanged || bgChanged);
-
-				if (needsShaderRender && glassCanvas) {
-					const cropX = Math.round((elRect.left - rootRect.left - SHADOW_PAD) * dpr);
-					const cropY = Math.round((elRect.top - rootRect.top - SHADOW_PAD) * dpr);
-					this.renderer.uploadAndBlur(
-						this.capture.canvas,
-						cropX,
-						cropY,
-						glassCanvas.width,
-						glassCanvas.height,
-						config.blurAmount,
-					);
-					this.renderer.clear();
-					this.renderer.renderGlassPanel(
-						config,
-						elRect.width,
-						elRect.height,
-						dpr,
-					);
-
-					const ctx = glassCanvas.getContext('2d')!;
-					ctx.clearRect(0, 0, glassCanvas.width, glassCanvas.height);
-					ctx.drawImage(
-						this.renderer.canvas,
-						0, 0, glassCanvas.width, glassCanvas.height,
-						0, 0, glassCanvas.width, glassCanvas.height,
-					);
-
-					this._glassCache.set(child, { centerX, centerY });
-					bgChanged = true;
-				}
-
-				// Composite glass onto hidden canvas for higher layers
-				this._blitGlassShader(child, elRect, rootRect, dpr);
-
-				const contentImg = this._glassContentImages.get(child);
-				if (contentImg) {
-					const cx = (elRect.left - rootRect.left) * dpr;
-					const cy = (elRect.top - rootRect.top) * dpr;
-					const cw = elRect.width * dpr;
-					const ch = elRect.height * dpr;
-					this.capture.ctx.drawImage(contentImg, cx, cy, cw, ch);
-				}
-
+				bgChanged = this._renderGlassElement(child, rootRect, dpr, isDragging, bgChanged);
 			} else {
-				// ── Non-glass element ─────────────────────────────
-				const isDynamic = child.hasAttribute('data-dynamic');
-				const tag = child.tagName;
-
-				if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') {
-					const r = child.getBoundingClientRect();
-					const dx = (r.left - rootRect.left) * dpr;
-					const dy = (r.top - rootRect.top) * dpr;
-					const dw = r.width * dpr;
-					const dh = r.height * dpr;
-
-					if (tag === 'CANVAS') {
-						this.capture.ctx.drawImage(child as HTMLCanvasElement, dx, dy, dw, dh);
-					} else {
-						const mediaEl = child as HTMLImageElement | HTMLVideoElement;
-						const natW = 'naturalWidth' in mediaEl
-							? (mediaEl as HTMLImageElement).naturalWidth
-							: (mediaEl as HTMLVideoElement).videoWidth;
-						const natH = 'naturalHeight' in mediaEl
-							? (mediaEl as HTMLImageElement).naturalHeight
-							: (mediaEl as HTMLVideoElement).videoHeight;
-
-						if (natW && natH) {
-							const computed = getComputedStyle(child);
-							const fit = computed.objectFit || 'fill';
-							const pos = computed.objectPosition || '50% 50%';
-
-							const src = LiquidGlass._objectFitRect(
-								natW, natH, r.width, r.height, fit, pos,
-							);
-							this.capture.ctx.drawImage(
-								mediaEl,
-								src.sx, src.sy, src.sw, src.sh,
-								dx, dy, dw, dh,
-							);
-						} else {
-							this.capture.ctx.drawImage(mediaEl, dx, dy, dw, dh);
-						}
-					}
-					if (isDynamic) bgChanged = true;
-				} else if (!isDynamic) {
-					if (!this.capture.blitFromCache(child)) {
-						this.capture.captureElement(child, false);
-						this._dirty = true;
-					}
-				} else {
-					this.capture.captureElement(child, true);
-					bgChanged = true;
-				}
+				bgChanged = this._captureNonGlassChild(child, rootRect, dpr, bgChanged);
 			}
 		}
 
 		if (this._dirty) {
 			this._dirty = false;
+		}
+	}
+
+	/**
+	 * Render a single glass element: run the shader if needed,
+	 * composite it onto the hidden canvas, then blit its content image.
+	 * Returns the updated bgChanged flag.
+	 */
+	private _renderGlassElement(
+		child: HTMLElement,
+		rootRect: DOMRect,
+		dpr: number,
+		isDragging: boolean,
+		bgChanged: boolean,
+	): boolean {
+		const config = this._getConfig(child);
+		const elRect = child.getBoundingClientRect();
+		const elW = child.offsetWidth;
+		const elH = child.offsetHeight;
+		const centerX = (elRect.left - rootRect.left) + elRect.width / 2;
+		const centerY = (elRect.top - rootRect.top) + elRect.height / 2;
+		const glassCanvas = this.glassCanvases.get(child);
+		const isBeingDragged = isDragging && this._drag.element === child;
+
+		const cached = this._glassCache.get(child);
+		const posChanged = !cached
+			|| Math.abs(cached.centerX - centerX) > 0.5
+			|| Math.abs(cached.centerY - centerY) > 0.5;
+
+		const needsShaderRender = isDragging
+			? (isBeingDragged || bgChanged)
+			: (!cached || posChanged || bgChanged);
+
+		if (needsShaderRender && glassCanvas) {
+			const cropX = Math.round((elRect.left - rootRect.left - SHADOW_PAD) * dpr);
+			const cropY = Math.round((elRect.top - rootRect.top - SHADOW_PAD) * dpr);
+			this.renderer.uploadAndBlur(
+				this.capture.canvas,
+				cropX,
+				cropY,
+				glassCanvas.width,
+				glassCanvas.height,
+				config.blurAmount,
+			);
+			this.renderer.clear();
+			this.renderer.renderGlassPanel(
+				config,
+				elW,
+				elH,
+				dpr,
+			);
+
+			const ctx = glassCanvas.getContext('2d')!;
+			ctx.clearRect(0, 0, glassCanvas.width, glassCanvas.height);
+			ctx.drawImage(
+				this.renderer.canvas,
+				0, 0, glassCanvas.width, glassCanvas.height,
+				0, 0, glassCanvas.width, glassCanvas.height,
+			);
+
+			this._glassCache.set(child, { centerX, centerY });
+			bgChanged = true;
+		}
+
+		// Composite glass onto hidden canvas for higher layers
+		this._blitGlassShader(child, elRect, rootRect, dpr);
+
+		const contentImg = this._glassContentImages.get(child);
+		if (contentImg) {
+			const cx = (elRect.left - rootRect.left) * dpr;
+			const cy = (elRect.top - rootRect.top) * dpr;
+			const cw = elRect.width * dpr;
+			const ch = elRect.height * dpr;
+			this.capture.ctx.drawImage(contentImg, cx, cy, cw, ch);
+		}
+
+		return bgChanged;
+	}
+
+	/**
+	 * Capture a non-glass direct child of root onto the compositing canvas.
+	 * If the child is a simple media element (img/video/canvas), draw it
+	 * via the fast path. Otherwise, recursively find media elements inside
+	 * it and draw them, then fall back to html-to-image for the rest.
+	 * Returns the updated bgChanged flag.
+	 */
+	private _captureNonGlassChild(
+		child: HTMLElement,
+		rootRect: DOMRect,
+		dpr: number,
+		bgChanged: boolean,
+	): boolean {
+		const tag = child.tagName;
+
+		if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') {
+			// Direct-child media element — fast path
+			const drew = this._drawMediaElement(child, rootRect, dpr);
+			if (drew && child.hasAttribute('data-dynamic')) bgChanged = true;
+			return bgChanged;
+		}
+
+		// It's a wrapper div. Draw any media descendants it contains
+		// via the fast path (since html-to-image can't render video).
+		const hasDynamic = this._captureMediaDescendants(child, rootRect, dpr);
+		if (hasDynamic) bgChanged = true;
+
+		// Also capture the wrapper's HTML content via html-to-image
+		// (for text, styled divs, etc.). This is additive — the media
+		// fast paths above already drew the video/img/canvas frames.
+		const isDynamic = child.hasAttribute('data-dynamic');
+		if (!isDynamic) {
+			if (!this.capture.blitFromCache(child)) {
+				this.capture.captureElement(child, false);
+				this._dirty = true;
+			}
+		} else {
+			this.capture.captureElement(child, true);
+			bgChanged = true;
+		}
+
+		return bgChanged;
+	}
+
+	/**
+	 * Recursively find and draw all img/video/canvas elements inside
+	 * a wrapper, skipping any glass elements and their injected canvases.
+	 * Returns true if any dynamic media was drawn.
+	 */
+	private _captureMediaDescendants(
+		parent: HTMLElement,
+		rootRect: DOMRect,
+		dpr: number,
+	): boolean {
+		let hasDynamic = false;
+		const mediaEls = parent.querySelectorAll('img, video, canvas');
+		for (const el of mediaEls) {
+			const htmlEl = el as HTMLElement;
+			// Skip the injected glass shader canvases
+			let isGlassCanvas = false;
+			for (const [, gc] of this.glassCanvases) {
+				if (gc === el) { isGlassCanvas = true; break; }
+			}
+			if (isGlassCanvas) continue;
+
+			const drew = this._drawMediaElement(htmlEl, rootRect, dpr);
+			if (drew) hasDynamic = true;
+		}
+		return hasDynamic;
+	}
+
+	/** Draw a single img/video/canvas onto the compositing canvas. Returns true if drawn. */
+	private _drawMediaElement(
+		el: HTMLElement,
+		rootRect: DOMRect,
+		dpr: number,
+	): boolean {
+		const tag = el.tagName;
+		const r = el.getBoundingClientRect();
+		const dx = (r.left - rootRect.left) * dpr;
+		const dy = (r.top - rootRect.top) * dpr;
+		const dw = r.width * dpr;
+		const dh = r.height * dpr;
+
+		if (tag === 'CANVAS') {
+			this.capture.ctx.drawImage(el as HTMLCanvasElement, dx, dy, dw, dh);
+			return true;
+		} else if (tag === 'IMG') {
+			const img = el as HTMLImageElement;
+			if (!img.complete || img.naturalWidth === 0) return false;
+			this._drawMediaFitted(img, img.naturalWidth, img.naturalHeight, el, r, dx, dy, dw, dh);
+			return true;
+		} else if (tag === 'VIDEO') {
+			const vid = el as HTMLVideoElement;
+			if (vid.readyState < 2) return false;
+			this._drawMediaFitted(vid, vid.videoWidth, vid.videoHeight, el, r, dx, dy, dw, dh);
+			return true;
+		}
+		return false;
+	}
+
+	/** Draw an img or video onto the compositing canvas, respecting object-fit. */
+	private _drawMediaFitted(
+		mediaEl: HTMLImageElement | HTMLVideoElement,
+		natW: number,
+		natH: number,
+		child: HTMLElement,
+		r: DOMRect,
+		dx: number,
+		dy: number,
+		dw: number,
+		dh: number,
+	): void {
+		if (natW && natH) {
+			const computed = getComputedStyle(child);
+			const fit = computed.objectFit || 'fill';
+			const pos = computed.objectPosition || '50% 50%';
+			const src = LiquidGlass._objectFitRect(natW, natH, r.width, r.height, fit, pos);
+			this.capture.ctx.drawImage(mediaEl, src.sx, src.sy, src.sw, src.sh, dx, dy, dw, dh);
+		} else {
+			this.capture.ctx.drawImage(mediaEl, dx, dy, dw, dh);
 		}
 	}
 
