@@ -1,13 +1,10 @@
 /**
  * HtmlCapture — renders DOM elements onto a hidden 2D canvas.
  *
- * Two rendering back-ends are supported:
- *   1. html-to-image (default) — uses the `html-to-image` library to
- *      rasterise DOM nodes into canvas-ready images.  The library
- *      handles style inlining, font embedding, canvas/image conversion
- *      and all the SVG-foreignObject plumbing internally.
- *   2. html-in-canvas API (experimental, behind a flag) — uses the
- *      browser-native HTMLCanvasElement.drawHTML() proposal.
+ * Uses the `html-to-image` library to rasterise DOM nodes into
+ * canvas-ready images.  The library handles style inlining, font
+ * embedding, canvas/image conversion and all the SVG-foreignObject
+ * plumbing internally.
  *
  * Static elements are captured once and cached.  Elements with the
  * `data-dynamic` attribute are re-captured every frame.
@@ -24,15 +21,13 @@ interface CacheEntry {
 
 export class HtmlCapture {
 	readonly root: HTMLElement;
-	useHtmlApi: boolean;
 	readonly canvas: HTMLCanvasElement;
 	readonly ctx: CanvasRenderingContext2D;
 	readonly cache: Map<HTMLElement, CacheEntry>;
 	dpr: number;
 
-	constructor(root: HTMLElement, useHtmlApi = false) {
+	constructor(root: HTMLElement) {
 		this.root = root;
-		this.useHtmlApi = useHtmlApi;
 
 		this.canvas = document.createElement('canvas');
 		this.canvas.style.display = 'none';
@@ -90,11 +85,7 @@ export class HtmlCapture {
 			return;
 		}
 
-		if (this.useHtmlApi) {
-			await this._captureWithHtmlApi(element, x, y, w, h, cssW, cssH, force);
-		} else {
-			await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
-		}
+		await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
 	}
 
 	/**
@@ -126,6 +117,11 @@ export class HtmlCapture {
 				height: cssH,
 				pixelRatio: this.dpr,
 				backgroundColor: undefined,
+				// Prevents SecurityError from cross-origin font stylesheets
+				// (e.g. Google Fonts / Material Icons). This capture is used
+				// for glass-on-glass compositing only, so font quality here
+				// does not affect the primary user-visible display.
+				skipFonts: true,
 				style: {
 					position: 'static',
 					top: 'auto',
@@ -183,9 +179,10 @@ export class HtmlCapture {
 		this.ctx.drawImage(glassCanvas, 0, 0, glassCanvas.width, glassCanvas.height, x, y, w, h);
 	}
 
-	/** Clear the hidden canvas. */
+	/** Clear the hidden canvas (filled white — matches a typical page background). */
 	clear(): void {
-		this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+		this.ctx.fillStyle = '#ffffff';
+		this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 	}
 
 	/** Destroy the capture system and free resources. */
@@ -195,7 +192,7 @@ export class HtmlCapture {
 	}
 
 	// ────────────────────────────────────────────
-	// html-to-image back-end (default)
+	// html-to-image back-end
 	// ────────────────────────────────────────────
 
 	private async _captureWithHtmlToImage(
@@ -213,6 +210,13 @@ export class HtmlCapture {
 				width: cssW,
 				height: cssH,
 				pixelRatio: this.dpr,
+				skipFonts: true,
+				// Skip media elements — they're drawn via the fast path
+				// (drawImage) and html-to-image can't render video frames.
+				filter: (node: HTMLElement) => {
+					const tag = node.tagName;
+					return tag !== 'VIDEO' && tag !== 'CANVAS';
+				},
 			});
 
 			this.ctx.drawImage(rendered, x, y, w, h);
@@ -222,43 +226,6 @@ export class HtmlCapture {
 			}
 		} catch (err) {
 			console.warn('LiquidGlass: html-to-image capture failed for element:', element, err);
-		}
-	}
-
-	// ────────────────────────────────────────────
-	// html-in-canvas API back-end (experimental)
-	// ────────────────────────────────────────────
-
-	private async _captureWithHtmlApi(
-		element: HTMLElement,
-		x: number,
-		y: number,
-		w: number,
-		h: number,
-		cssW: number,
-		cssH: number,
-		force: boolean,
-	): Promise<void> {
-		const ctx = this.ctx as CanvasRenderingContext2D & {
-			drawHTML?: (el: HTMLElement, x: number, y: number, w: number, h: number) => Promise<void>;
-		};
-
-		if (typeof ctx.drawHTML === 'function') {
-			this.ctx.save();
-			this.ctx.translate(x, y);
-			this.ctx.scale(this.dpr, this.dpr);
-			try {
-				await ctx.drawHTML(element, 0, 0, cssW, cssH);
-			} catch (_err) {
-				this.ctx.restore();
-				await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
-				return;
-			}
-			this.ctx.restore();
-		} else {
-			console.warn('LiquidGlass: html-in-canvas API not available, falling back to html-to-image.');
-			this.useHtmlApi = false;
-			await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH, force);
 		}
 	}
 }
