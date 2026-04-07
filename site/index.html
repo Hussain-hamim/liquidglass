@@ -214,7 +214,7 @@ body {
 
 		p {
 			padding: 28px;
-			font-size: 14px;
+			font-size: 22px;
 			line-height: 1.8;
 			color: #444;
 		}
@@ -321,11 +321,36 @@ body {
 		margin-bottom: 16px;
 	}
 
+	h3 {
+		font-size: 20px;
+		font-weight: 600;
+		margin: 32px 0 12px;
+		color: #333;
+	}
+
 	p {
 		font-size: 17px;
 		line-height: 1.7;
 		color: #444;
 		margin-bottom: 20px;
+	}
+
+	ul {
+		font-size: 16px;
+		line-height: 1.7;
+		color: #444;
+		margin: 0 0 20px 24px;
+
+		li {
+			margin-bottom: 10px;
+		}
+
+		code {
+			background: #f0f0f4;
+			padding: 2px 6px;
+			border-radius: 4px;
+			font-size: 14px;
+		}
 	}
 }
 
@@ -781,6 +806,45 @@ instance.destroy();</code></pre>
 		</div>
 		<div class="preview-magnifier-dome liquid-glass-preview-mag"></div>
 	</div>
+</div>
+
+<!-- ━━━━━━━━━━━━ LIMITATIONS ━━━━━━━━━━━━ -->
+<div class="section">
+	<h2>Limitations &amp; Gotchas</h2>
+	<p>
+		The library leans on real-time DOM rasterisation and a multi-pass WebGL pipeline. That comes with a handful of constraints worth knowing before you wire it into a production page.
+	</p>
+
+	<h3>Structural</h3>
+	<ul>
+		<li><strong>Glass elements must be direct children of the root.</strong> Nested glass is rejected at init with a console warning. If you need glass inside a wrapper, give the wrapper its own <code>LiquidGlass.init()</code> call.</li>
+		<li><strong>The root itself is never captured.</strong> The shader samples the root's <em>children</em>, so any background image, padding, or border on the root is invisible to the glass effect. Put backgrounds in a sibling element <em>inside</em> the root (e.g. an absolutely positioned <code>&lt;img&gt;</code>).</li>
+		<li><strong>A <code>&lt;canvas&gt;</code> is injected as the glass element's first child</strong> for shader output. Avoid <code>:first-child</code> selectors on glass elements.</li>
+		<li><strong>Multiple LiquidGlass roots cannot share refraction.</strong> A glass element in one root cannot see what another root's glass elements are rendering — they each have their own compositing canvas.</li>
+	</ul>
+
+	<h3>Performance</h3>
+	<ul>
+		<li><strong>Capturing DOM into a canvas is expensive.</strong> Every non-glass wrapper is rasterised via <code>html-to-image</code> (style inlining + SVG-foreignObject decode). Keep wrappers small and shallow.</li>
+		<li><strong><code>data-dynamic</code> re-captures every frame.</strong> Use it only for content that actually changes — animations, counters, charts. Without it, static content is captured once and cached.</li>
+		<li><strong>Each LiquidGlass instance opens its own WebGL context.</strong> Browsers cap concurrent contexts (typically 16 system-wide); don't spawn dozens.</li>
+		<li><strong>Window resize re-captures everything.</strong> Don't drive layout in a tight resize loop.</li>
+	</ul>
+
+	<h3>Text alignment</h3>
+	<ul>
+		<li><strong>Use integer-pixel <code>font-size</code> values</strong> for any text that may sit under glass. Sub-pixel sizes (e.g. <code>0.92em</code>, <code>clamp(...)</code>) cause sub-pixel rounding differences between live HTML rendering and the SVG-foreignObject path used for capture, which shifts glyph positions inside the refraction.</li>
+		<li><strong>Webfonts must be loaded before <code>init()</code></strong> and served with CORS-friendly headers. Google Fonts, jsdelivr, and unpkg work out of the box. Self-hosted fonts on a same-origin server need no special config. Webfonts loaded after init will fall back to system fonts inside captured rasters.</li>
+		<li><strong>Cross-origin <code>&lt;img&gt;</code> elements need <code>crossorigin="anonymous"</code></strong>. Tainted canvases break texture upload and disable the glass effect for the entire root.</li>
+	</ul>
+
+	<h3>API</h3>
+	<ul>
+		<li><strong><code>LiquidGlass.init()</code> is async</strong> — it resolves only after font CSS prefetch, glass content pre-capture, and static-content pre-warm have all completed. On a slow connection that can be 100&ndash;500&nbsp;ms.</li>
+		<li><strong><code>data-dynamic</code> only catches direct children of the root.</strong> A live element nested inside a wrapper that lacks <code>data-dynamic</code> will not trigger re-captures.</li>
+		<li><strong>The library auto-detects <code>&lt;video&gt;</code> elements as dynamic</strong> — you don't need to add <code>data-dynamic</code> to them.</li>
+		<li><strong><code>html-to-image</code> cannot rasterise <code>&lt;video&gt;</code> or <code>&lt;canvas&gt;</code></strong>. The library handles them via a fast <code>drawImage</code> path instead.</li>
+	</ul>
 </div>
 
 <!-- ━━━━━━━━━━━━ FOOTER ━━━━━━━━━━━━ -->
