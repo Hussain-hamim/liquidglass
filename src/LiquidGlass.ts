@@ -170,6 +170,11 @@ export class LiquidGlass {
 		this._handleResize();
 
 		await this._captureGlassContent();
+		// Pre-warm the static-content cache so the first rendered frame
+		// has real DOM behind every glass panel — without this, the
+		// shader briefly samples the empty (white) compositing canvas
+		// while async html-to-image captures resolve.
+		await this._prewarmStaticCaptures();
 
 		window.addEventListener('resize', this._onResize);
 		this.root.addEventListener('pointerdown', this._onPointerDown);
@@ -359,6 +364,27 @@ export class LiquidGlass {
 			}
 		} finally {
 			this._capturingGlassContent = false;
+		}
+	}
+
+	/**
+	 * Synchronously walk every non-glass direct child of root and
+	 * await its html-to-image capture so the cache is fully populated
+	 * by the time the render loop starts. Without this, the first
+	 * frame's glass shader sees the empty (white) compositing canvas
+	 * for ~one or two frames while the async captures resolve.
+	 */
+	private async _prewarmStaticCaptures(): Promise<void> {
+		for (const child of this._sortedChildren) {
+			if (this.glassSet.has(child)) continue;
+			const tag = child.tagName;
+			if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') continue;
+			if (child.hasAttribute('data-dynamic')) continue;
+			try {
+				await this.capture.captureElement(child, false);
+			} catch (err) {
+				console.warn('LiquidGlass: prewarm capture failed:', child, err);
+			}
 		}
 	}
 
