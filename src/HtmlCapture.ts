@@ -29,6 +29,13 @@ export class HtmlCapture {
 	private readonly _capturing = new Set<HTMLElement>();
 	/** Optional callback fired when an async re-capture finishes and the cache changes. */
 	onCacheUpdate: (() => void) | null = null;
+	/**
+	 * Prefetched @font-face CSS (with base64 src URLs) used for every
+	 * subsequent toCanvas call. Computed once at init via prefetchFontEmbedCSS.
+	 * Empty string = no embeds available, but still passed so html-to-image
+	 * skips its noisy CSSOM-walking branch on every capture.
+	 */
+	private _fontEmbedCSS = '';
 
 	constructor(root: HTMLElement) {
 		this.root = root;
@@ -45,6 +52,102 @@ export class HtmlCapture {
 	// ────────────────────────────────────────────
 	// Public API
 	// ────────────────────────────────────────────
+
+	/**
+	 * Build the page's @font-face CSS once at init, with every src URL
+	 * resolved to a base64 data URL. The result is reused on every
+	 * subsequent toCanvas call so the captured raster renders text with
+	 * the page's actual webfonts (e.g. Inter) instead of system fallbacks.
+	 * Matching glyph metrics is what makes the refracted text line up
+	 * with the live DOM under the glass.
+	 *
+	 * Implemented manually rather than via html-to-image's getFontEmbedCSS
+	 * because that path walks document.styleSheets via CSSOM, which throws
+	 * SecurityError on every cross-origin stylesheet and has a brittle
+	 * recovery flow. We just fetch each <link rel="stylesheet"> directly
+	 * (CORS-friendly for the typical Google Fonts / CDN cases), regex out
+	 * the @font-face blocks, and inline each url(...) ourselves.
+	 */
+	async prefetchFontEmbedCSS(): Promise<void> {
+		const cssTexts: string[] = [];
+
+		// 1. Fetch every <link rel="stylesheet"> directly. fetch() works
+		//    for cross-origin sheets that serve CORS-friendly responses
+		//    (Google Fonts, jsdelivr, unpkg, etc.).
+		const links = Array.from(
+			document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
+		);
+		for (const link of links) {
+			if (!link.href) continue;
+			try {
+				const res = await fetch(link.href);
+				if (res.ok) cssTexts.push(await res.text());
+			} catch {
+				// Network error or CORS blocked — skip this sheet.
+			}
+		}
+
+		// 2. Pick up inline same-origin @font-face rules from the page's
+		//    own <style> blocks. These are readable via CSSOM without
+		//    any cross-origin issues.
+		for (const sheet of Array.from(document.styleSheets)) {
+			if (sheet.href) continue;
+			try {
+				for (const rule of Array.from(sheet.cssRules || [])) {
+					if (rule.type === CSSRule.FONT_FACE_RULE) {
+						cssTexts.push(rule.cssText);
+					}
+				}
+			} catch {
+				// SecurityError — skip.
+			}
+		}
+
+		// 3. Extract every top-level @font-face block from the combined
+		//    CSS text via regex. This handles the standard Google Fonts
+		//    shape (each rule is a flat block at the top level).
+		const allCSS = cssTexts.join('\n');
+		const fontFaceBlocks = allCSS.match(/@font-face\s*\{[^}]*\}/gi) || [];
+
+		// 4. For each block, replace any url(...) reference with a base64
+		//    data URL fetched directly. The original URL may already be
+		//    a data: URL — leave those alone.
+		const embedded = await Promise.all(
+			fontFaceBlocks.map(async (block) => {
+				const urlRegex = /url\(\s*['"]?([^'")\s]+)['"]?\s*\)/g;
+				const matches = Array.from(block.matchAll(urlRegex));
+				let result = block;
+				for (const m of matches) {
+					const url = m[1];
+					if (url.startsWith('data:')) continue;
+					try {
+						const res = await fetch(url);
+						if (!res.ok) continue;
+						const blob = await res.blob();
+						const dataUrl = await new Promise<string>((resolve, reject) => {
+							const reader = new FileReader();
+							reader.onload = () => resolve(reader.result as string);
+							reader.onerror = reject;
+							reader.readAsDataURL(blob);
+						});
+						result = result.replace(m[0], `url(${dataUrl})`);
+					} catch {
+						// skip this URL
+					}
+				}
+				return result;
+			}),
+		);
+
+		this._fontEmbedCSS = embedded.join('\n');
+		if (this._fontEmbedCSS === '') {
+			console.warn(
+				'LiquidGlass: no @font-face rules found on the page; '
+				+ 'captured rasters will use system fallback fonts and may '
+				+ 'misalign with the live DOM under glass elements.',
+			);
+		}
+	}
 
 	/**
 	 * Resize the hidden canvas to match the root element.
@@ -81,10 +184,16 @@ export class HtmlCapture {
 		const rect = element.getBoundingClientRect();
 		const cssW = rect.width;
 		const cssH = rect.height;
-		const x = (rect.left - rootRect.left) * this.dpr;
-		const y = (rect.top - rootRect.top) * this.dpr;
-		const w = cssW * this.dpr;
-		const h = cssH * this.dpr;
+		// Pixel-snap the destination rect: drawImage with fractional
+		// destination coordinates linearly interpolates the source
+		// canvas, blurring and shifting the captured glyphs by ~1
+		// device pixel. Snapping to integer device pixels keeps the
+		// captured raster pixel-aligned with the live DOM glyphs the
+		// browser renders underneath the glass.
+		const x = Math.round((rect.left - rootRect.left) * this.dpr);
+		const y = Math.round((rect.top - rootRect.top) * this.dpr);
+		const w = Math.round(cssW * this.dpr);
+		const h = Math.round(cssH * this.dpr);
 
 		// Always blit any existing cache first — even if stale — so the
 		// compositing canvas never has a transparent hole at this
@@ -146,11 +255,11 @@ export class HtmlCapture {
 				height: cssH,
 				pixelRatio: this.dpr,
 				backgroundColor: undefined,
-				// Prevents SecurityError from cross-origin font stylesheets
-				// (e.g. Google Fonts / Material Icons). This capture is used
-				// for glass-on-glass compositing only, so font quality here
-				// does not affect the primary user-visible display.
-				skipFonts: true,
+				// Reuse the prefetched font embed CSS so the per-glass
+				// content image (used for compositing labels on top of
+				// the shader output) uses the same Inter face the live
+				// page does. Skips html-to-image's noisy CSSOM walk.
+				fontEmbedCSS: this._fontEmbedCSS,
 				filter: hideSet
 					? (node: HTMLElement) => !hideSet.has(node)
 					: undefined,
@@ -228,16 +337,13 @@ export class HtmlCapture {
 					const tag = node.tagName;
 					return tag !== 'VIDEO' && tag !== 'CANVAS';
 				},
-				// Pass an empty fontEmbedCSS to bypass html-to-image's
-				// CSSOM-walking font-embed step. That step throws (and
-				// noisily logs) SecurityError on any cross-origin
-				// stylesheet (e.g. Google Fonts loaded via <link>),
-				// because it tries to insertRule into another sheet that
-				// it can't read. Setting fontEmbedCSS to a string makes
-				// it skip the entire path. The captured raster falls
-				// back to system fonts for any text that needs a custom
-				// face — acceptable for the compositing-canvas use case.
-				fontEmbedCSS: '',
+				// Reuse the prefetched font embed CSS so the captured
+				// raster renders with the page's actual webfont (e.g.
+				// Inter), keeping wraps and glyph positions aligned
+				// with the live DOM. Passing a string (even an empty
+				// one) makes html-to-image skip its noisy CSSOM-walking
+				// branch on every per-element capture.
+				fontEmbedCSS: this._fontEmbedCSS,
 			});
 
 			// Store the new render in the cache. Do NOT draw to ctx

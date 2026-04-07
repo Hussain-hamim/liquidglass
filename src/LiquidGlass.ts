@@ -174,6 +174,12 @@ export class LiquidGlass {
 		this._sortedChildren = this._getSortedChildren();
 		this._handleResize();
 
+		// Resolve the page's @font-face rules to base64 data URLs once
+		// up front, so every subsequent html-to-image capture renders
+		// text with the page's actual webfont (matching glyph metrics
+		// with the live DOM under the glass).
+		await this.capture.prefetchFontEmbedCSS();
+
 		await this._captureGlassContent();
 		// Pre-warm the static-content cache so the first rendered frame
 		// has real DOM behind every glass panel — without this, the
