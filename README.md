@@ -8,11 +8,11 @@ A liquid glass effect library for the web. Apply realistic glass refraction, blu
 npm install liquid-glass
 ```
 
-Or include directly via `<script type="module">`:
+Or import directly via `<script type="module">`:
 
 ```html
 <script type="module">
-  import { LiquidGlass } from './src/index.js';
+  import { LiquidGlass } from 'liquid-glass';
 </script>
 ```
 
@@ -20,12 +20,16 @@ Or include directly via `<script type="module">`:
 
 ```html
 <div id="root">
-  <!-- Non-glass content (rendered normally, captured for glass effect) -->
-  <div class="content" data-dynamic>
-    <h1>Hello World</h1>
-  </div>
+  <!-- Background image (sibling of the glass, captured by the shader) -->
+  <img class="bg" src="background.jpg" alt="">
 
-  <!-- Glass element (gets the liquid glass effect) -->
+  <!-- Static content -->
+  <h1 class="title">Hello World</h1>
+
+  <!-- Animated content needs data-dynamic so it re-captures every frame -->
+  <div class="counter" data-dynamic>0</div>
+
+  <!-- Glass element -->
   <div class="my-glass">Glass Panel</div>
 </div>
 
@@ -38,7 +42,7 @@ Or include directly via `<script type="module">`:
     blurAmount: 0.25,
   });
 
-  const instance = LiquidGlass.init({
+  const instance = await LiquidGlass.init({
     root: document.querySelector('#root'),
     glassElements: [glassEl],
   });
@@ -50,30 +54,38 @@ Or include directly via `<script type="module">`:
 
 ## How It Works
 
-1. **Non-glass elements** (direct children of root) render normally in the DOM. They are also captured onto a hidden canvas using SVG `foreignObject` to serve as the background for the glass effect.
-
-2. **Glass elements** receive a child `<canvas>` that displays the liquid glass effect. The effect is rendered with WebGL shaders that sample the captured background, apply blur, refraction, chromatic aberration, specular highlights, and more.
-
-3. **Layered compositing** ensures correct rendering when glass elements overlap each other or when non-glass elements appear above glass in the stacking order.
+1. **Non-glass children of the root** are rasterised onto a hidden canvas using `html-to-image` (which clones the subtree, inlines computed styles, and renders via SVG `foreignObject`). Static children are captured once and cached; children with `data-dynamic` (or any `<video>`) are re-captured every frame.
+2. **`<img>`, `<canvas>`, and `<video>`** are drawn directly via `ctx.drawImage` (faster than `html-to-image`, and the only way to capture live video frames).
+3. **Glass elements** receive an injected child `<canvas>` that displays the WebGL output. For each glass element, the renderer crops the compositing canvas at the panel's location, runs an optional Gaussian blur, then runs a fragment shader that applies refraction, frost, chromatic aberration, Fresnel reflection, multi-light specular highlights, an inner-stroke rim, and a drop shadow.
+4. **Layered compositing** writes each rendered glass canvas back to the compositing canvas before the next glass element runs, so a glass element above another sees the lower one in its refraction.
 
 ## API
 
 ### `LiquidGlass.init(options)`
 
-Creates and starts a LiquidGlass instance.
+Async — creates and starts a LiquidGlass instance. Resolves once the page's webfonts have been pre-fetched and every glass element's content has been pre-captured.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `root` | `HTMLElement` | *(required)* | The container element. All glass and content elements must be direct children. |
-| `glassElements` | `NodeList \| HTMLElement[]` | *(required)* | Elements to apply the glass effect to. |
-| `defaults` | `object` | `{}` | Override the default configuration values globally. |
-| `useHtmlInCanvas` | `boolean` | `false` | Use the experimental html-in-canvas API instead of SVG foreignObject. |
+| `root` | `HTMLElement` | *(required)* | The container element. Glass elements must be **direct children** of this element. |
+| `glassElements` | `NodeList \| HTMLElement[]` | `[]` | Elements to apply the glass effect to. |
+| `defaults` | `Partial<GlassConfig>` | `{}` | Override the default per-element configuration values for this instance. |
 
-**Returns** a `LiquidGlass` instance with a `.destroy()` method.
+**Returns** a `Promise<LiquidGlass>` resolving to the instance, which exposes:
 
-### `instance.destroy()`
+- `.fps: number` — current measured frames-per-second (updated once per second).
+- `.destroy(): void` — stop the render loop, remove injected canvases, restore mutated inline styles, and free WebGL resources.
 
-Stops the render loop, removes injected canvases, cleans up event listeners and WebGL resources.
+```javascript
+const instance = await LiquidGlass.init({
+  root: document.querySelector('#root'),
+  glassElements: document.querySelectorAll('.glass'),
+  defaults: {
+    cornerRadius: 24,
+    refraction: 0.8,
+  },
+});
+```
 
 ## Per-Element Configuration
 
@@ -87,76 +99,99 @@ element.dataset.config = JSON.stringify({
 });
 ```
 
-The configuration is re-read on every frame, so you can change it dynamically.
+The library re-reads `data-config` whenever it changes (via a MutationObserver), so you can update it dynamically.
 
 ### Available Options
 
-| Option | Type | Default | Range | Description |
-|---|---|---|---|---|
-| `blurAmount` | `number` | `0.00` | 0 – 1 | Background blur intensity |
-| `frostAmount` | `number` | `1.00` | 0 – 1 | Frosted glass intensity |
-| `refraction` | `number` | `0.69` | 0 – 1 | How much the glass bends the image behind it |
-| `chromAberration` | `number` | `0.03` | 0 – 1 | Chromatic aberration (colour fringing at edges) |
-| `edgeHighlight` | `number` | `0.21` | 0 – 1 | Edge glow / rim lighting intensity |
-| `specular` | `number` | `0.00` | 0 – 1 | Specular highlight intensity (Blinn-Phong) |
-| `fresnel` | `number` | `1.00` | 0 – 1 | Fresnel reflection at grazing angles |
-| `distortion` | `number` | `0.00` | 0 – 1 | Micro-distortion noise |
-| `cornerRadius` | `number` | `65` | 0 – 100 | Corner radius in CSS pixels |
-| `zRadius` | `number` | `40` | 1 – 120 | Bevel depth (pill curvature) |
-| `opacity` | `number` | `1.00` | 0 – 1 | Overall glass opacity |
-| `saturation` | `number` | `0.00` | -1 – 1 | Saturation adjustment |
-| `tintStrength` | `number` | `0.00` | 0 – 1 | Cool blue glass tint strength |
-| `brightness` | `number` | `0.00` | -0.5 – 0.5 | Brightness adjustment |
-| `shadowOpacity` | `number` | `0.30` | 0 – 1 | Drop shadow opacity |
-| `shadowSpread` | `number` | `10` | 1 – 80 | Drop shadow spread in pixels |
-| `shadowOffsetY` | `number` | `1` | -30 – 50 | Shadow vertical offset in pixels |
-| `floating` | `boolean` | `false` | — | Enable drag-to-move via Pointer Events |
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `blurAmount` | `number` | `0.00` | Background blur intensity (0&nbsp;– 1) |
+| `frostAmount` | `number` | `1.00` | Frosted glass intensity — how much of the *blurred* sample is mixed in vs the sharp sample (0&nbsp;– 1) |
+| `refraction` | `number` | `0.69` | How much the glass bends the image behind it |
+| `chromAberration` | `number` | `0.05` | Chromatic aberration / colour fringing at edges |
+| `edgeHighlight` | `number` | `0.05` | Edge glow / rim lighting intensity |
+| `specular` | `number` | `0.00` | Specular highlight intensity (multi-light Blinn-Phong) |
+| `fresnel` | `number` | `1.00` | Fresnel reflection at grazing angles |
+| `distortion` | `number` | `0.00` | Micro-distortion noise strength |
+| `cornerRadius` | `number` | `65` | Corner radius in CSS pixels |
+| `zRadius` | `number` | `40` | Bevel depth — controls the curvature of the pill's cross-section |
+| `opacity` | `number` | `1.00` | Overall glass panel opacity |
+| `saturation` | `number` | `0.00` | Saturation adjustment (-1 = grayscale, 0 = normal, 1 = vivid) |
+| `tintStrength` | `number` | `0.00` | Cool blue glass tint strength |
+| `brightness` | `number` | `0.00` | Brightness adjustment (-0.5 to 0.5) |
+| `shadowOpacity` | `number` | `0.30` | Drop shadow opacity |
+| `shadowSpread` | `number` | `10` | Drop shadow spread in CSS pixels |
+| `shadowOffsetY` | `number` | `1` | Shadow vertical offset in CSS pixels |
+| `floating` | `boolean` | `false` | Enable drag-to-move via Pointer Events |
+| `button` | `boolean` | `false` | Button mode — hovering brightens the panel; pressing flattens the bevel and deepens the shadow |
+| `bevelMode` | `0 \| 1` | `0` | `0` = biconvex pill (default). `1` = dome / plano-convex; pair with `cornerRadius === zRadius` for a half-sphere magnifier. |
 
 ## Element Attributes
 
 ### `data-dynamic`
 
-Add `data-dynamic` to non-glass children of the root element to mark them as dynamic. Dynamic elements are re-captured every frame, so animations, hover effects, and other live changes are reflected in the glass effect in real-time.
-
-Static elements (without `data-dynamic`) are captured once and cached for performance.
+Add `data-dynamic` to any **direct child of the root** whose contents change every frame (counters, animated text, charts). Without it, that wrapper is captured once and cached forever.
 
 ```html
 <div id="root">
-  <!-- Captured once, cached -->
-  <div class="static-bg">...</div>
-
-  <!-- Re-captured every frame -->
-  <div class="animated-content" data-dynamic>...</div>
-
+  <div class="static-bg">...</div>          <!-- captured once, cached -->
+  <div class="counter" data-dynamic>...</div> <!-- re-captured every frame -->
   <div class="glass">...</div>
 </div>
 ```
 
+`<video>` elements are auto-detected as dynamic — you don't need to add `data-dynamic` to them.
+
 ### `data-config`
 
-JSON string of per-element configuration options (see table above).
-
-## HTML Capture Methods
-
-### html-to-image (default)
-
-The default method uses the [`html-to-image`](https://www.npmjs.com/package/html-to-image) library, which handles cloning nodes, inlining computed styles, embedding fonts as base-64, converting `<canvas>` / `<img>` elements to data-URIs, and rasterising via SVG `foreignObject` under the hood. Static elements are captured once and cached for performance.
-
-### html-in-canvas API (experimental)
-
-When `useHtmlInCanvas: true` is passed to `init()`, the library uses the proposed `CanvasRenderingContext2D.drawHTML()` API. This is more efficient but not yet widely supported. If the API is unavailable, the library automatically falls back to `html-to-image`.
+JSON string of per-element configuration options (see the table above). Must decode to an object; invalid JSON or non-object values are ignored with a console warning.
 
 ## Stacking & Z-Index
 
-The library respects the visual stacking order of all direct children of the root element. Glass elements do not need to be the topmost children — the library correctly handles:
+The library re-implements the CSS stacking-context spec to decide painting order on the compositing canvas. It recognises the following stacking-context triggers on direct children of the root:
 
-- Non-glass elements below glass elements
-- Non-glass elements above glass elements  
-- Overlapping glass elements (layered compositing)
+- Non-static `position` (with z-index)
+- Grid/flex item with explicit `z-index`
+- `opacity < 1`
+- `transform`, `filter`, `perspective`, `clip-path`, `mix-blend-mode`, `isolation`, `backdrop-filter`, `mask-image`, `contain: layout|paint|strict|content`
+- `will-change` listing any of the above properties
+
+If you put an overlay above a background image and the glass shows the bg but not the overlay, you've hit a missing trigger — file an issue with the property name.
+
+## Limitations & Gotchas
+
+### Structural
+
+- **Glass elements must be direct children of the root.** Nested glass is rejected at init with a console warning. If you need glass inside a wrapper, give the wrapper its own `LiquidGlass.init()` call.
+- **The root itself is never captured.** The shader samples the root's *children*, so any background image, padding, or border on the root is invisible to the glass effect. Put backgrounds in a sibling element *inside* the root.
+- **A `<canvas>` is injected as the glass element's first child** for shader output. Avoid `:first-child` selectors on glass elements.
+- **Multiple LiquidGlass roots cannot share refraction.** A glass element in one root cannot see what another root's glass elements are rendering — they each have their own compositing canvas.
+- **The shadow halo extends 60 px outside the glass element.** The injected canvas overflows its parent's box and will be clipped by any ancestor with `overflow: hidden`.
+
+### Performance
+
+- **Capturing DOM into a canvas is expensive.** Every non-glass wrapper is rasterised via `html-to-image` (style inlining + SVG-foreignObject decode). Keep wrappers small and shallow.
+- **`data-dynamic` re-captures every frame.** Use it sparingly — only for content that actually changes.
+- **Each LiquidGlass instance opens its own WebGL context.** Browsers cap concurrent contexts (typically 16 system-wide); don't spawn dozens.
+- **Window resize re-captures everything.** Don't drive layout in a tight resize loop.
+- **The render loop short-circuits when nothing is dirty** — a static page with no `<video>` and no `data-dynamic` content does almost no work per frame.
+
+### Text alignment
+
+- **Use integer-pixel `font-size` values** for any text that may sit under glass. Sub-pixel sizes (e.g. `0.92em`, `clamp(...)`) cause rounding differences between live HTML rendering and the SVG-foreignObject path used for capture, which shifts glyph positions inside the refraction.
+- **Webfonts must be loaded before `init()`** and served with CORS-friendly headers. Google Fonts, jsdelivr, and unpkg work out of the box. Webfonts loaded after init will fall back to system fonts inside captured rasters.
+- **Cross-origin `<img>` elements need `crossorigin="anonymous"`.** Tainted canvases break texture upload and disable the glass effect for the entire root.
+
+### API
+
+- **`LiquidGlass.init()` is async.** It resolves only after the font CSS prefetch, glass content pre-capture, and static-content pre-warm have all completed (typically 100–500 ms on a fresh page).
+- **`data-dynamic` only catches direct children of the root.** Live content nested inside a wrapper that lacks `data-dynamic` will not trigger re-captures.
+- **`html-to-image` cannot rasterise `<video>` or `<canvas>`** — the library handles them via a fast `drawImage` path instead.
+- **`destroy()` does not restore an element's original `position: static`** if the library overwrote it with `relative`. Re-init on the same elements is fine; exotic external mutation in between is not.
 
 ## Browser Support
 
-Requires WebGL 1.0 support. Works in all modern browsers (Chrome, Firefox, Safari, Edge).
+Requires WebGL 1.0 + Canvas 2D + SVG `foreignObject`. Effectively all evergreen browsers (Chrome, Firefox, Safari, Edge). WebGL context loss is recovered automatically.
 
 ## License
 
