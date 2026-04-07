@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liquid Glass — WebGL Glass Effects for the Web</title>
+
+<!-- Google Fonts: Inter + Material Symbols -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" rel="stylesheet">
+
+<!-- Prism.js for syntax highlighting -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+
+<script type="importmap">
+{
+	"imports": {
+		"html-to-image": "https://esm.sh/html-to-image@1.11.11"
+	}
+}
+</script>
+<style>
+*, *::before, *::after {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+body {
+	font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
+	color: #222;
+	background: #f5f5f7;
+}
+.material-symbols-outlined {
+	font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ────────────────────────────────────────
+   HERO — named grid areas
+   ──────────────────────────────────────── */
+#hero-root {
+	position: relative;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	grid-template-areas:
+		"title     title"
+		"buttons   buttons"
+		"video     magnifier"
+		"panels    panels"
+		"icons     icons";
+	gap: 20px;
+	padding: 48px clamp(24px, 5vw, 80px) 60px;
+	min-height: 100vh;
+	overflow: hidden;
+	align-content: center;
+
+	.hero-bg {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		z-index: 0;
+		pointer-events: none;
+		transition: opacity 0.4s ease;
+	}
+
+	.hero-title {
+		grid-area: title;
+		text-align: center;
+		z-index: 2;
+		pointer-events: none;
+		padding: 20px 0 10px;
+
+		h1 {
+			color: #fff;
+			font-size: clamp(2.5em, 5vw, 4em);
+			font-weight: 800;
+			text-shadow: 0 2px 24px rgba(0,0,0,0.5);
+			letter-spacing: -1px;
+		}
+
+		.subtitle {
+			color: rgba(255,255,255,0.75);
+			font-size: clamp(1em, 1.8vw, 1.3em);
+			margin-top: 12px;
+			text-shadow: 0 1px 8px rgba(0,0,0,0.4);
+		}
+	}
+
+	.hero-buttons-bar {
+		grid-area: buttons;
+		display: flex;
+		justify-content: center;
+		gap: 16px;
+		z-index: 2;
+	}
+
+	.hero-btn {
+		display: inline-flex;
+		align-items: center;
+		padding: 14px 28px;
+		color: #fff;
+		text-decoration: none;
+		font-weight: 600;
+		font-size: 1em;
+		white-space: nowrap;
+
+		.label {
+			position: relative;
+			z-index: 2;
+			pointer-events: none;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+
+			svg {
+				width: 20px;
+				height: 20px;
+				fill: currentColor;
+				flex-shrink: 0;
+			}
+		}
+	}
+
+	.hero-video-wrap {
+		grid-area: video;
+		position: relative;
+		border-radius: 16px;
+		overflow: hidden;
+		z-index: 1;
+		aspect-ratio: 16 / 9;
+
+		video {
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+			display: block;
+		}
+	}
+
+	.glass-video-ctrl {
+		position: absolute;
+		bottom: 8px;
+		left: 8px;
+		right: 8px;
+		display: flex;
+		align-items: center;
+		padding: 10px 16px;
+		color: #fff;
+		z-index: 3;
+
+		.label {
+			position: relative;
+			z-index: 2;
+			pointer-events: none;
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			width: 100%;
+		}
+	}
+
+	.video-play-btn {
+		background: none;
+		border: none;
+		color: #fff;
+		cursor: pointer;
+		line-height: 1;
+		pointer-events: auto;
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+
+		.material-symbols-outlined {
+			font-size: 26px;
+		}
+	}
+
+	.video-slider {
+		flex: 1;
+		height: 4px;
+		appearance: none;
+		background: rgba(255,255,255,0.3);
+		border-radius: 2px;
+		outline: none;
+		cursor: pointer;
+		pointer-events: auto;
+
+		&::-webkit-slider-thumb {
+			-webkit-appearance: none;
+			width: 14px;
+			height: 14px;
+			border-radius: 50%;
+			background: #fff;
+			cursor: pointer;
+		}
+	}
+
+	.hero-mag-wrap {
+		grid-area: magnifier;
+		position: relative;
+		border-radius: 16px;
+		background: rgba(255,255,255,0.93);
+		z-index: 1;
+		overflow: hidden;
+		min-height: 200px;
+		display: flex;
+		flex-flow: column nowrap;
+		justify-content: center;
+
+		p {
+			padding: 28px;
+			font-size: 0.88em;
+			line-height: 1.8;
+			color: #444;
+		}
+	}
+
+	.hero-magnifier {
+		position: absolute;
+		width: 60px;
+		height: 60px;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 3;
+	}
+
+	.hero-panels-wrap {
+		grid-area: panels;
+		position: relative;
+		border-radius: 20px;
+		overflow: hidden;
+		min-height: 260px;
+		z-index: 1;
+	}
+
+	.float-panel {
+		position: absolute;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #fff;
+		font-weight: 600;
+		font-size: 1.1em;
+		padding: 24px 32px;
+		z-index: 3;
+
+		.label {
+			position: relative;
+			z-index: 2;
+			pointer-events: none;
+			text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+		}
+	}
+	.fp-1 { top: 50%; left: 60px; transform: translateY(-50%); }
+	.fp-2 { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+	.fp-3 { top: 50%; right: 60px; transform: translateY(-50%); }
+
+	.hero-icons {
+		grid-area: icons;
+		position: relative;
+		align-self: end;
+		justify-self: center;
+		display: flex;
+		gap: 40px;
+		padding: 16px 40px;
+		border-radius: 20px;
+		background: rgba(255,255,255,0.08);
+		backdrop-filter: blur(10px);
+		z-index: 4;
+		white-space: nowrap;
+		margin-bottom: 16px;
+
+		.material-symbols-outlined {
+			font-size: 40px;
+			color: #fff;
+			filter: drop-shadow(0 2px 6px rgba(0,0,0,0.3));
+			cursor: pointer;
+			transition: opacity 0.2s ease;
+
+			&:hover { opacity: 0.85; }
+		}
+
+		#glass-icon-indicator {
+			position: absolute;
+			top: 0;
+			left: 0;
+			height: 100%;
+			aspect-ratio: 1 / 1;
+			z-index: 5;
+			pointer-events: none;
+			transform: translate(-9999px, 0);
+			transition: transform 0.45s cubic-bezier(0.65, 0, 0.35, 1);
+			will-change: transform;
+		}
+	}
+
+	.hero-fps {
+		position: absolute;
+		top: 16px;
+		right: 16px;
+		background: rgba(0,0,0,0.5);
+		backdrop-filter: blur(6px);
+		padding: 6px 14px;
+		border-radius: 16px;
+		color: #0f0;
+		font-size: 0.8em;
+		font-family: 'SF Mono', Menlo, Consolas, monospace;
+		z-index: 10;
+		pointer-events: none;
+	}
+}
+
+/* ────────────────────────────────────────
+   Sections
+   ──────────────────────────────────────── */
+.section {
+	max-width: 1000px;
+	margin: 0 auto;
+	padding: 80px 24px;
+
+	h2 {
+		font-size: 2em;
+		font-weight: 700;
+		margin-bottom: 16px;
+	}
+
+	p {
+		font-size: 1.05em;
+		line-height: 1.7;
+		color: #444;
+		margin-bottom: 20px;
+	}
+}
+
+pre[class*="language-"] {
+	border-radius: 12px;
+	margin-bottom: 24px;
+	font-size: 0.85em;
+}
+code[class*="language-"] {
+	font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* ── Preview containers ── */
+.preview-container,
+.preview-buttons {
+	position: relative;
+	border-radius: 16px;
+	overflow: hidden;
+	margin-bottom: 48px;
+
+	> img {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+}
+.preview-container { height: 280px; }
+.preview-buttons { height: 200px; }
+
+.preview-panel {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-weight: 600;
+	padding: 20px 28px;
+	z-index: 1;
+
+	.label {
+		position: relative;
+		z-index: 2;
+		pointer-events: none;
+		text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+	}
+}
+
+.preview-magnifier {
+	position: relative;
+	border-radius: 16px;
+	overflow: hidden;
+	height: 280px;
+	margin-bottom: 48px;
+	background: #fff;
+
+	.preview-magnifier-text {
+		padding: 24px;
+		font-size: 0.92em;
+		line-height: 1.8;
+		color: #444;
+		columns: 2;
+		column-gap: 32px;
+	}
+
+	.preview-magnifier-dome {
+		position: absolute;
+		width: 60px;
+		height: 60px;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 1;
+	}
+}
+
+.preview-btn {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 14px 28px;
+	color: #fff;
+	text-decoration: none;
+	font-weight: 600;
+	font-size: 1em;
+	z-index: 1;
+
+	.label {
+		position: relative;
+		z-index: 2;
+		pointer-events: none;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+}
+
+/* ── Interactive playground ── */
+.playground {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 32px;
+	margin-bottom: 48px;
+
+	.playground-controls {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+
+		label {
+			display: grid;
+			grid-template-columns: 140px 1fr 52px;
+			align-items: center;
+			gap: 8px;
+			font-size: 0.88em;
+			color: #444;
+		}
+
+		input[type="range"] {
+			width: 100%;
+			height: 6px;
+			appearance: none;
+			background: #ddd;
+			border-radius: 3px;
+			outline: none;
+
+			&::-webkit-slider-thumb {
+				-webkit-appearance: none;
+				width: 16px;
+				height: 16px;
+				border-radius: 50%;
+				background: #667eea;
+				cursor: pointer;
+			}
+		}
+
+		.val {
+			text-align: right;
+			font-family: 'SF Mono', Menlo, Consolas, monospace;
+			font-size: 0.82em;
+			color: #888;
+			min-width: 52px;
+		}
+	}
+
+	.playground-preview {
+		position: relative;
+		border-radius: 16px;
+		overflow: hidden;
+		min-height: 360px;
+
+		> img {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			object-fit: cover;
+		}
+	}
+
+	.playground-glass {
+		position: absolute;
+		width: 180px;
+		height: 90px;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #fff;
+		font-weight: 800;
+		z-index: 1;
+
+		.label {
+			position: relative;
+			z-index: 2;
+			pointer-events: none;
+			text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+		}
+	}
+}
+
+/* ── Config table ── */
+.config-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-bottom: 40px;
+	font-size: 0.92em;
+
+	th {
+		text-align: left;
+		padding: 10px 12px;
+		border-bottom: 2px solid #ddd;
+		color: #333;
+	}
+
+	td {
+		padding: 8px 12px;
+		border-bottom: 1px solid #eee;
+		color: #555;
+	}
+
+	code {
+		background: #f0f0f4;
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-size: 0.9em;
+	}
+}
+
+/* ── Footer ── */
+.footer {
+	text-align: center;
+	padding: 40px 24px;
+	color: #888;
+	font-size: 0.95em;
+	border-top: 1px solid #e5e5e5;
+
+	a {
+		color: #667eea;
+		text-decoration: none;
+	}
+}
+
+/* ── Responsive ── */
+@media (max-width: 700px) {
+	#hero-root {
+		grid-template-columns: 1fr;
+		grid-template-areas:
+			"title"
+			"buttons"
+			"video"
+			"magnifier"
+			"panels";
+	}
+	.playground {
+		grid-template-columns: 1fr;
+	}
+}
+</style>
+</head>
+<body>
+
+<!-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     HERO — uses several LiquidGlass roots:
+       #hero-root         (buttons + floating panels)
+       #video-root        (video controls overlay)
+       #magnifier-root    (dome magnifier)
+       #hero-icons-root   (icon indicator pill)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ -->
+<div id="hero-root">
+
+	<!-- Background image -->
+	<img class="hero-bg" src="background-1.avif" alt="">
+
+	<!-- Title -->
+	<div class="hero-title">
+		<h1>Liquid Glass</h1>
+		<p class="subtitle">Realistic WebGL glass effects for any HTML element</p>
+	</div>
+
+	<!-- Buttons bar (non-glass wrapper — for grid positioning) -->
+	<div class="hero-buttons-bar">
+		<a href="https://github.com/niclas-nicey/LiquidGlass" target="_blank" class="hero-btn" id="glass-btn-1">
+			<span class="label">
+				<svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.73.083-.73 1.205.085 1.84 1.237 1.84 1.237 1.07 1.834 2.806 1.304 3.49.997.108-.775.42-1.305.763-1.605-2.665-.3-5.467-1.332-5.467-5.93 0-1.31.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.3 1.23A11.5 11.5 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.29-1.552 3.297-1.23 3.297-1.23.653 1.652.242 2.873.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.921.43.372.823 1.102.823 2.222 0 1.606-.015 2.896-.015 3.293 0 .322.216.694.825.576C20.565 21.795 24 17.298 24 12c0-6.63-5.37-12-12-12z"/></svg>
+				View on GitHub
+			</span>
+		</a>
+		<a href="https://x.com/ybouane" target="_blank" class="hero-btn" id="glass-btn-2">
+			<span class="label">
+				<svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+				@ybouane
+			</span>
+		</a>
+	</div>
+
+	<!-- Video wrap — its own LiquidGlass root for the controls overlay -->
+	<div class="hero-video-wrap" id="video-root">
+		<video id="hero-video" src="video.mp4" autoplay muted loop playsinline data-dynamic></video>
+		<div class="glass-video-ctrl" id="glass-video-ctrl">
+			<span class="label">
+				<button class="video-play-btn" id="video-play-btn"><span class="material-symbols-outlined">pause</span></button>
+				<input type="range" class="video-slider" id="video-slider" min="0" max="1000" value="0">
+			</span>
+		</div>
+	</div>
+
+	<!-- Magnifier wrap (non-glass, holds text + magnifier dome) -->
+	<div class="hero-mag-wrap" id="magnifier-root">
+		<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt.</p>
+		<div class="hero-magnifier" id="glass-magnifier"></div>
+	</div>
+
+	<!-- Floating panels background strip -->
+	<div class="hero-panels-wrap">
+		<div class="float-panel fp-1" id="glass-fp1"><span class="label">Regular Glass</span></div>
+		<div class="float-panel fp-2" id="glass-fp2"><span class="label">Frosted Glass</span></div>
+		<div class="float-panel fp-3" id="glass-fp3"><span class="label">Dark Glass</span></div>
+	</div>
+
+	<!-- Icons overlay — its own LiquidGlass root so the indicator can live inside it -->
+	<div class="hero-icons" id="hero-icons-root">
+		<span class="material-symbols-outlined" data-bg="1">light_mode</span>
+		<span class="material-symbols-outlined" data-bg="2">dark_mode</span>
+		<span class="material-symbols-outlined" data-bg="3">volume_up</span>
+		<div id="glass-icon-indicator"></div>
+	</div>
+
+	<!-- FPS -->
+	<div class="hero-fps" id="hero-fps">-- FPS</div>
+</div>
+
+<!-- ━━━━━━━━━━━━ INTRO ━━━━━━━━━━━━ -->
+<div class="section">
+	<h2>What is Liquid Glass?</h2>
+	<p>
+		Liquid Glass is a lightweight JavaScript/TypeScript library that applies realistic glass refraction, blur, chromatic aberration, and lighting effects to any HTML element using WebGL shaders. It captures the DOM content behind each glass element, processes it through a multi-pass rendering pipeline, and composites the result in real time.
+	</p>
+	<p>
+		The library handles layered compositing (glass-on-glass), dynamic content updates, draggable floating panels, responsive resizing, and works with any background &mdash; images, videos, canvases, or plain HTML.
+	</p>
+
+	<h2>Getting Started</h2>
+	<p>Install via npm:</p>
+	<pre class="language-bash"><code>npm install liquid-glass</code></pre>
+
+	<p>Basic usage:</p>
+	<pre class="language-javascript"><code>import { LiquidGlass } from 'liquid-glass';
+
+const instance = await LiquidGlass.init({
+    root: document.querySelector('#my-root'),
+    glassElements: document.querySelectorAll('.glass'),
+});
+
+// Later:
+instance.destroy();</code></pre>
+
+	<p>The root element must be a positioned container (<code>position: relative</code>) and each glass element must be a direct child of the root. Each glass element gets a child <code>&lt;canvas&gt;</code> injected automatically for the shader output.</p>
+</div>
+
+<!-- ━━━━━━━━━━━━ INTERACTIVE PLAYGROUND ━━━━━━━━━━━━ -->
+<div class="section" style="padding-bottom: 0;">
+	<h2>Interactive Playground</h2>
+	<p>Adjust the sliders to see how each parameter affects the glass effect in real time. Drag the glass panel to move it around.</p>
+
+	<div class="playground">
+		<div class="playground-controls" id="pg-controls">
+			<!-- Populated by JS -->
+		</div>
+		<div class="playground-preview" id="pg-root">
+			<img src="background-3.avif" alt="">
+			<div class="playground-glass" id="pg-glass"><span class="label">Glass</span></div>
+		</div>
+	</div>
+</div>
+
+<!-- ━━━━━━━━━━━━ CONFIG REFERENCE ━━━━━━━━━━━━ -->
+<div class="section" style="padding-top: 0;">
+	<h2>Configuration Options</h2>
+	<p>Each glass element can be configured individually via <code>data-config</code> (JSON) or globally via the <code>defaults</code> option:</p>
+
+	<table class="config-table">
+		<thead>
+			<tr><th>Option</th><th>Type</th><th>Default</th><th>Description</th></tr>
+		</thead>
+		<tbody>
+			<tr><td><code>blurAmount</code></td><td>number</td><td>0</td><td>Background blur intensity (0&ndash;1)</td></tr>
+			<tr><td><code>frostAmount</code></td><td>number</td><td>1</td><td>Frost/frosted-glass intensity (0&ndash;1)</td></tr>
+			<tr><td><code>refraction</code></td><td>number</td><td>0.69</td><td>How much the glass bends light</td></tr>
+			<tr><td><code>chromAberration</code></td><td>number</td><td>0.05</td><td>Color fringing at edges</td></tr>
+			<tr><td><code>edgeHighlight</code></td><td>number</td><td>0.05</td><td>Inner glow / rim lighting</td></tr>
+			<tr><td><code>specular</code></td><td>number</td><td>0</td><td>Specular highlight (Blinn-Phong)</td></tr>
+			<tr><td><code>fresnel</code></td><td>number</td><td>1</td><td>Fresnel reflection at grazing angles</td></tr>
+			<tr><td><code>cornerRadius</code></td><td>number</td><td>65</td><td>Corner radius in CSS px</td></tr>
+			<tr><td><code>zRadius</code></td><td>number</td><td>40</td><td>Bevel depth (curvature)</td></tr>
+			<tr><td><code>brightness</code></td><td>number</td><td>0</td><td>Brightness adjustment (-0.5 to 0.5)</td></tr>
+			<tr><td><code>saturation</code></td><td>number</td><td>0</td><td>Saturation (-1 to 1)</td></tr>
+			<tr><td><code>shadowOpacity</code></td><td>number</td><td>0.3</td><td>Drop shadow opacity</td></tr>
+			<tr><td><code>floating</code></td><td>boolean</td><td>false</td><td>Enable drag-to-move</td></tr>
+			<tr><td><code>button</code></td><td>boolean</td><td>false</td><td>Button mode (hover/press shader feedback)</td></tr>
+			<tr><td><code>bevelMode</code></td><td>number</td><td>0</td><td>0 = biconvex pill, 1 = dome (flat bottom)</td></tr>
+		</tbody>
+	</table>
+
+	<!-- ── Example: Frosted Panel ── -->
+	<h2>Frosted Panel</h2>
+	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
+    blurAmount: 0.25,
+    frostAmount: 1,
+    cornerRadius: 30,
+});</code></pre>
+	<div class="preview-container" id="preview-frost-root">
+		<img src="background-1.avif" alt="">
+		<div class="preview-panel liquid-glass-preview-frost" style="top:50%;left:50%;transform:translate(-50%,-50%);"><span class="label">Frosted Glass</span></div>
+	</div>
+
+	<!-- ── Example: Dark Glass ── -->
+	<h2>Dark Glass</h2>
+	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
+    brightness: -0.3,
+    frostAmount: 0.95,
+    cornerRadius: 50,
+});</code></pre>
+	<div class="preview-container" id="preview-dark-root">
+		<img src="background-2.avif" alt="">
+		<div class="preview-panel liquid-glass-preview-dark" style="top:50%;left:50%;transform:translate(-50%,-50%);"><span class="label">Dark Glass</span></div>
+	</div>
+
+	<!-- ── Example: Button Mode ── -->
+	<h2>Button Mode</h2>
+	<p>Set <code>button: true</code> to make a glass element react to hover and press: hovering brightens it, pressing flattens the bevel and deepens the shadow. Try the button below:</p>
+	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
+    button: true,
+    cornerRadius: 24,
+});</code></pre>
+	<div class="preview-buttons" id="preview-btn-root">
+		<img src="background-3.avif" alt="">
+		<a href="#" class="preview-btn liquid-glass-preview-btn" onclick="return false">
+			<span class="label">Click Me</span>
+		</a>
+	</div>
+
+	<!-- ── Example: Dome Magnifier ── -->
+	<h2>Dome Bevel (Magnifier)</h2>
+	<p>Set <code>bevelMode: 1</code> with equal <code>cornerRadius</code> and <code>zRadius</code> for a half-sphere lens effect. Try dragging the dome below:</p>
+	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
+    bevelMode: 1,
+    cornerRadius: 50,
+    zRadius: 50,
+    floating: true,
+    blurAmount: 0,
+    frostAmount: 0,
+    refraction: 1.2,
+});</code></pre>
+	<div class="preview-magnifier" id="preview-mag-root">
+		<div class="preview-magnifier-text">
+			Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+		</div>
+		<div class="preview-magnifier-dome liquid-glass-preview-mag"></div>
+	</div>
+</div>
+
+<!-- ━━━━━━━━━━━━ FOOTER ━━━━━━━━━━━━ -->
+<div class="footer">
+	Made with &#10084;&#65039; in &#127464;&#127462; by <a href="https://x.com/ybouane" target="_blank">@ybouane</a>
+</div>
+
+<!-- ━━━━━━━━━━━━ SCRIPTS ━━━━━━━━━━━━ -->
+<script>
+// ── Video player controls ──
+(function () {
+	const video = document.getElementById('hero-video');
+	const playBtn = document.getElementById('video-play-btn');
+	const slider = document.getElementById('video-slider');
+	if (!video || !playBtn || !slider) return;
+
+	const playIcon = playBtn.querySelector('.material-symbols-outlined');
+	playBtn.addEventListener('click', () => {
+		if (video.paused) {
+			video.play();
+			playIcon.textContent = 'pause';
+		} else {
+			video.pause();
+			playIcon.textContent = 'play_arrow';
+		}
+	});
+
+	video.addEventListener('timeupdate', () => {
+		if (video.duration) {
+			slider.value = (video.currentTime / video.duration) * 1000;
+		}
+	});
+
+	slider.addEventListener('input', () => {
+		if (video.duration) {
+			video.currentTime = (slider.value / 1000) * video.duration;
+		}
+	});
+})();
+</script>
+
+<script type="module">
+import { LiquidGlass } from '../dist/index.js';
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// HERO — single root, nested glass elements
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Configure all glass elements
+document.getElementById('glass-btn-1').dataset.config = JSON.stringify({
+	button: true,
+	cornerRadius: 28,
+});
+document.getElementById('glass-btn-2').dataset.config = JSON.stringify({
+	button: true,
+	cornerRadius: 28,
+});
+document.getElementById('glass-video-ctrl').dataset.config = JSON.stringify({
+	cornerRadius: 20,
+	zRadius: 20,
+	blurAmount: 0.15,
+	frostAmount: 0.8,
+	brightness: -0.1,
+});
+document.getElementById('glass-magnifier').dataset.config = JSON.stringify({
+	bevelMode: 1,
+	cornerRadius: 15,
+	zRadius: 15,
+	floating: true,
+	blurAmount: 0,
+	frostAmount: 0,
+	refraction: 1.2,
+	edgeHighlight: 0.15,
+	shadowOpacity: 0.2,
+});
+document.getElementById('glass-fp1').dataset.config = JSON.stringify({
+	floating: true,
+	cornerRadius: 40,
+	blurAmount: 0,
+});
+document.getElementById('glass-fp2').dataset.config = JSON.stringify({
+	floating: true,
+	cornerRadius: 40,
+	blurAmount: 0.25,
+	frostAmount: 1,
+});
+document.getElementById('glass-fp3').dataset.config = JSON.stringify({
+	floating: true,
+	cornerRadius: 40,
+	brightness: -0.3,
+	frostAmount: 0.95,
+});
+document.getElementById('glass-icon-indicator').dataset.config = JSON.stringify({
+	cornerRadius: 4,
+	zRadius: 4,
+	blurAmount: 0,
+	frostAmount: 0.4,
+	edgeHighlight: 0.2,
+	shadowOpacity: 0.25,
+});
+
+// Hero root — only direct-child glass elements live here.
+const heroInstance = await LiquidGlass.init({
+	root: document.getElementById('hero-root'),
+	glassElements: document.querySelectorAll(
+		'#glass-btn-1, #glass-btn-2, #glass-fp1, #glass-fp2, #glass-fp3'
+	),
+});
+
+// Icons bar — own root so the indicator pill can be a direct child of it.
+await LiquidGlass.init({
+	root: document.getElementById('hero-icons-root'),
+	glassElements: [document.getElementById('glass-icon-indicator')],
+});
+
+// ─── Icon switcher: clicking an icon swaps the background image
+//     and slides the glass indicator pill above it ───
+{
+	const heroBg = document.querySelector('.hero-bg');
+	const iconsRoot = document.getElementById('hero-icons-root');
+	const indicator = document.getElementById('glass-icon-indicator');
+	const icons = iconsRoot.querySelectorAll('.material-symbols-outlined');
+
+	function moveIndicator(iconEl) {
+		const rootRect = iconsRoot.getBoundingClientRect();
+		const iconRect = iconEl.getBoundingClientRect();
+		const x = iconRect.left + iconRect.width / 2 - rootRect.left - indicator.offsetWidth / 2;
+		indicator.style.transform = `translate(${x}px, 0)`;
+	}
+
+	let active = icons[0];
+	icons.forEach((icon) => {
+		icon.addEventListener('click', () => {
+			heroBg.src = `background-${icon.dataset.bg}.avif`;
+			active = icon;
+			moveIndicator(icon);
+		});
+	});
+
+	// Initial placement (after layout settles + indicator canvas sized).
+	requestAnimationFrame(() => requestAnimationFrame(() => moveIndicator(active)));
+	window.addEventListener('resize', () => moveIndicator(active));
+}
+
+// Video controls — own root (#video-root = .hero-video-wrap).
+await LiquidGlass.init({
+	root: document.getElementById('video-root'),
+	glassElements: [document.getElementById('glass-video-ctrl')],
+});
+
+// Magnifier dome — own root (#magnifier-root = .hero-mag-wrap).
+await LiquidGlass.init({
+	root: document.getElementById('magnifier-root'),
+	glassElements: [document.getElementById('glass-magnifier')],
+});
+
+const fpsEl = document.getElementById('hero-fps');
+setInterval(() => {
+	fpsEl.textContent = heroInstance.fps + ' FPS';
+}, 500);
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// INTERACTIVE PLAYGROUND
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const pgParams = [
+	{ key: 'blurAmount',     label: 'Blur Amount',     min: 0, max: 1,   step: 0.01, def: 0 },
+	{ key: 'frostAmount',    label: 'Frost Amount',    min: 0, max: 1,   step: 0.01, def: 1 },
+	{ key: 'refraction',     label: 'Refraction',      min: 0, max: 2,   step: 0.01, def: 0.69 },
+	{ key: 'chromAberration',label: 'Chrom. Aberration',min: 0, max: 0.3, step: 0.005, def: 0.05 },
+	{ key: 'edgeHighlight',  label: 'Edge Highlight',  min: 0, max: 1,   step: 0.01, def: 0.05 },
+	{ key: 'specular',       label: 'Specular',        min: 0, max: 1,   step: 0.01, def: 0 },
+	{ key: 'fresnel',        label: 'Fresnel',         min: 0, max: 2,   step: 0.01, def: 1 },
+	{ key: 'distortion',     label: 'Distortion',      min: 0, max: 1,   step: 0.01, def: 0 },
+	{ key: 'cornerRadius',   label: 'Corner Radius',   min: 0, max: 100, step: 1,    def: 40 },
+	{ key: 'zRadius',        label: 'Z-Radius',        min: 1, max: 100, step: 1,    def: 40 },
+	{ key: 'opacity',        label: 'Opacity',         min: 0, max: 1,   step: 0.01, def: 1 },
+	{ key: 'saturation',     label: 'Saturation',      min: -1, max: 1,  step: 0.01, def: 0 },
+	{ key: 'brightness',     label: 'Brightness',      min: -0.5, max: 0.5, step: 0.01, def: 0 },
+	{ key: 'shadowOpacity',  label: 'Shadow Opacity',  min: 0, max: 1,   step: 0.01, def: 0.3 },
+	{ key: 'shadowSpread',   label: 'Shadow Spread',   min: 0, max: 40,  step: 1,    def: 10 },
+	{ key: 'bevelMode',      label: 'Bevel Mode',      min: 0, max: 1,   step: 1,    def: 0 },
+];
+
+const pgControls = document.getElementById('pg-controls');
+const pgGlass = document.getElementById('pg-glass');
+
+function buildPgConfig() {
+	const cfg = { floating: true };
+	for (const p of pgParams) {
+		const input = document.getElementById('pg-' + p.key);
+		cfg[p.key] = parseFloat(input.value);
+	}
+	return cfg;
+}
+
+for (const p of pgParams) {
+	const label = document.createElement('label');
+	label.innerHTML =
+		`<span>${p.label}</span>` +
+		`<input type="range" id="pg-${p.key}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def}">` +
+		`<span class="val" id="pg-val-${p.key}">${p.def}</span>`;
+	pgControls.appendChild(label);
+
+	label.querySelector('input').addEventListener('input', (e) => {
+		document.getElementById('pg-val-' + p.key).textContent = e.target.value;
+		pgGlass.dataset.config = JSON.stringify(buildPgConfig());
+	});
+}
+
+pgGlass.dataset.config = JSON.stringify(buildPgConfig());
+
+await LiquidGlass.init({
+	root: document.getElementById('pg-root'),
+	glassElements: [pgGlass],
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// PREVIEW DEMOS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// ── Preview: Frosted ──
+document.querySelector('.liquid-glass-preview-frost').dataset.config = JSON.stringify({
+	blurAmount: 0.25,
+	frostAmount: 1,
+	cornerRadius: 30,
+	floating: true,
+});
+await LiquidGlass.init({
+	root: document.getElementById('preview-frost-root'),
+	glassElements: document.querySelectorAll('.liquid-glass-preview-frost'),
+});
+
+// ── Preview: Dark ──
+document.querySelector('.liquid-glass-preview-dark').dataset.config = JSON.stringify({
+	brightness: -0.3,
+	frostAmount: 0.95,
+	cornerRadius: 50,
+	floating: true,
+});
+await LiquidGlass.init({
+	root: document.getElementById('preview-dark-root'),
+	glassElements: document.querySelectorAll('.liquid-glass-preview-dark'),
+});
+
+// ── Preview: Button ──
+document.querySelector('.liquid-glass-preview-btn').dataset.config = JSON.stringify({
+	button: true,
+	cornerRadius: 24,
+});
+await LiquidGlass.init({
+	root: document.getElementById('preview-btn-root'),
+	glassElements: document.querySelectorAll('.liquid-glass-preview-btn'),
+});
+
+// ── Preview: Magnifier dome ──
+document.querySelector('.liquid-glass-preview-mag').dataset.config = JSON.stringify({
+	bevelMode: 1,
+	cornerRadius: 30,
+	zRadius: 30,
+	floating: true,
+	blurAmount: 0,
+	frostAmount: 0,
+	refraction: 1.2,
+	edgeHighlight: 0.15,
+	shadowOpacity: 0.2,
+});
+await LiquidGlass.init({
+	root: document.getElementById('preview-mag-root'),
+	glassElements: document.querySelectorAll('.liquid-glass-preview-mag'),
+});
+</script>
+</body>
+</html>
