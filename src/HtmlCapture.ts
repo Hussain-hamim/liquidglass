@@ -56,6 +56,13 @@ export class HtmlCapture {
 	/**
 	 * Capture a single DOM element onto the hidden canvas at its
 	 * correct position relative to the root.
+	 *
+	 * Cache semantics:
+	 *   - Same size as cache → blit cached canvas at the CURRENT position
+	 *     (and update the stored x/y so future blits stay in sync). This
+	 *     handles layout shifts (font load, grid reflow, etc.) without
+	 *     async re-capture flicker.
+	 *   - Different size → drop the cache entry and re-capture.
 	 */
 	async captureElement(element: HTMLElement, force = false): Promise<void> {
 		const rootRect = this.root.getBoundingClientRect();
@@ -69,11 +76,15 @@ export class HtmlCapture {
 		const w = cssW * this.dpr;
 		const h = cssH * this.dpr;
 
-		// Use cache for static elements
 		if (!force && this.cache.has(element)) {
 			const cached = this.cache.get(element)!;
-			if (cached.x === x && cached.y === y && cached.w === w && cached.h === h) {
+			// Tolerant size comparison — getBoundingClientRect can vary
+			// by sub-pixel amounts between frames even when the layout
+			// hasn't actually changed.
+			if (Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5) {
 				this.ctx.drawImage(cached.canvas, x, y, w, h);
+				cached.x = x;
+				cached.y = y;
 				return;
 			}
 			this.cache.delete(element);
@@ -90,12 +101,12 @@ export class HtmlCapture {
 
 	/**
 	 * Capture an element's DOM content as a standalone canvas, optionally
-	 * hiding specified child nodes during the capture.
+	 * excluding specified child nodes from the capture.
 	 *
-	 * This is designed to run **outside** the render loop (e.g. during
-	 * init) so that the brief display:none on hideNodes is not visible
-	 * to the user.  The returned canvas can then be blitted synchronously
-	 * inside the render loop via drawImage.
+	 * The hideNodes are pruned from the cloned tree via html-to-image's
+	 * filter callback, so the live DOM is never mutated and there is no
+	 * visible flicker on the page even when this runs inside the render
+	 * loop (e.g. on a re-capture triggered by a content change).
 	 */
 	async captureToCanvas(
 		element: HTMLElement,
@@ -103,13 +114,9 @@ export class HtmlCapture {
 		cssH: number,
 		hideNodes: HTMLElement[] | null = null,
 	): Promise<HTMLCanvasElement | null> {
-		const savedDisplays: string[] = [];
-		if (hideNodes) {
-			for (const node of hideNodes) {
-				savedDisplays.push(node.style.display);
-				node.style.display = 'none';
-			}
-		}
+		const hideSet: Set<HTMLElement> | null = hideNodes && hideNodes.length
+			? new Set(hideNodes)
+			: null;
 
 		try {
 			const rendered = await toCanvas(element, {
@@ -122,6 +129,9 @@ export class HtmlCapture {
 				// for glass-on-glass compositing only, so font quality here
 				// does not affect the primary user-visible display.
 				skipFonts: true,
+				filter: hideSet
+					? (node: HTMLElement) => !hideSet.has(node)
+					: undefined,
 				style: {
 					position: 'static',
 					top: 'auto',
@@ -136,12 +146,6 @@ export class HtmlCapture {
 		} catch (err) {
 			console.warn('LiquidGlass: captureToCanvas failed for element:', element, err);
 			return null;
-		} finally {
-			if (hideNodes) {
-				for (let i = 0; i < hideNodes.length; i++) {
-					hideNodes[i].style.display = savedDisplays[i];
-				}
-			}
 		}
 	}
 
@@ -153,16 +157,30 @@ export class HtmlCapture {
 	}
 
 	/**
-	 * Blit a cached capture onto the hidden canvas without re-capturing.
-	 * Returns true if a cache entry existed, false otherwise.
+	 * Blit a cached capture onto the hidden canvas at the element's
+	 * CURRENT bounding rect, without re-capturing. Returns true if a
+	 * matching-size cache entry existed (and was blitted), false if the
+	 * cache was missing or had stale dimensions.
 	 */
 	blitFromCache(element: HTMLElement): boolean {
 		const cached = this.cache.get(element);
-		if (cached) {
-			this.ctx.drawImage(cached.canvas, cached.x, cached.y, cached.w, cached.h);
-			return true;
+		if (!cached) return false;
+
+		const rootRect = this.root.getBoundingClientRect();
+		const rect = element.getBoundingClientRect();
+		const x = (rect.left - rootRect.left) * this.dpr;
+		const y = (rect.top - rootRect.top) * this.dpr;
+		const w = rect.width * this.dpr;
+		const h = rect.height * this.dpr;
+
+		if (Math.abs(cached.w - w) >= 0.5 || Math.abs(cached.h - h) >= 0.5) {
+			return false;
 		}
-		return false;
+
+		this.ctx.drawImage(cached.canvas, x, y, w, h);
+		cached.x = x;
+		cached.y = y;
+		return true;
 	}
 
 	/**
@@ -210,13 +228,22 @@ export class HtmlCapture {
 				width: cssW,
 				height: cssH,
 				pixelRatio: this.dpr,
-				skipFonts: true,
 				// Skip media elements — they're drawn via the fast path
 				// (drawImage) and html-to-image can't render video frames.
 				filter: (node: HTMLElement) => {
 					const tag = node.tagName;
 					return tag !== 'VIDEO' && tag !== 'CANVAS';
 				},
+				// Pass an empty fontEmbedCSS to bypass html-to-image's
+				// CSSOM-walking font-embed step. That step throws (and
+				// noisily logs) SecurityError on any cross-origin
+				// stylesheet (e.g. Google Fonts loaded via <link>),
+				// because it tries to insertRule into another sheet that
+				// it can't read. Setting fontEmbedCSS to a string makes
+				// it skip the entire path. The captured raster falls
+				// back to system fonts for any text that needs a custom
+				// face — acceptable for the compositing-canvas use case.
+				fontEmbedCSS: '',
 			});
 
 			this.ctx.drawImage(rendered, x, y, w, h);
