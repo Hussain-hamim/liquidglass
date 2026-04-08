@@ -112,7 +112,7 @@ export class GlassRenderer {
 		this.glassP = this._link(VS_GLASS, FS_GLASS);
 		this.glassU = this._uloc(this.glassP, [
 			'u_bgTex', 'u_blurTex', 'u_center', 'u_size', 'u_radius',
-			'u_res', 'u_pad', 'u_frost', 'u_refract', 'u_chroma',
+			'u_res', 'u_pad', 'u_refract', 'u_chroma',
 			'u_edgeHL', 'u_spec', 'u_fresnel', 'u_distort', 'u_alpha',
 			'u_sat', 'u_tint', 'u_zRadius', 'u_brightness',
 			'u_shadowAlpha', 'u_shadowSpread', 'u_shadowOffY',
@@ -263,7 +263,6 @@ export class GlassRenderer {
 
 		gl.uniform1f(this.glassU.u_radius, config.cornerRadius * dpr);
 		gl.uniform1f(this.glassU.u_pad, SHADOW_PAD * dpr);
-		gl.uniform1f(this.glassU.u_frost, config.frostAmount);
 		gl.uniform1f(this.glassU.u_refract, config.refraction);
 		gl.uniform1f(this.glassU.u_chroma, config.chromAberration);
 		gl.uniform1f(this.glassU.u_edgeHL, config.edgeHighlight);

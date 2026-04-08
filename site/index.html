@@ -746,8 +746,7 @@ instance.destroy();</code></pre>
 			<tr><th>Option</th><th>Type</th><th>Default</th><th>Description</th></tr>
 		</thead>
 		<tbody>
-			<tr><td><code>blurAmount</code></td><td>number</td><td>0</td><td>Gaussian blur strength on the captured background (0&ndash;1)</td></tr>
-			<tr><td><code>frostAmount</code></td><td>number</td><td>0</td><td>Milky-white frosted overlay strength, independent of blur (0&ndash;1)</td></tr>
+			<tr><td><code>blurAmount</code></td><td>number</td><td>0</td><td>Background blur strength — softens / frosts the captured background (0&ndash;1)</td></tr>
 			<tr><td><code>refraction</code></td><td>number</td><td>0.69</td><td>How much the glass bends light</td></tr>
 			<tr><td><code>chromAberration</code></td><td>number</td><td>0.05</td><td>Color fringing at edges</td></tr>
 			<tr><td><code>edgeHighlight</code></td><td>number</td><td>0.05</td><td>Inner glow / rim lighting</td></tr>
@@ -768,7 +767,6 @@ instance.destroy();</code></pre>
 	<h2>Frosted Panel</h2>
 	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
     blurAmount: 0.25,
-    frostAmount: 1,
     cornerRadius: 30,
 });</code></pre>
 	<div class="preview-container" id="preview-frost-root">
@@ -780,7 +778,7 @@ instance.destroy();</code></pre>
 	<h2>Dark Glass</h2>
 	<pre class="language-javascript"><code>element.dataset.config = JSON.stringify({
     brightness: -0.3,
-    frostAmount: 0.95,
+    blurAmount: 0.25,
     cornerRadius: 50,
 });</code></pre>
 	<div class="preview-container" id="preview-dark-root">
@@ -811,7 +809,6 @@ instance.destroy();</code></pre>
     zRadius: 50,
     floating: true,
     blurAmount: 0,
-    frostAmount: 0,
     refraction: 1.2,
 });</code></pre>
 	<div class="preview-magnifier" id="preview-mag-root">
@@ -951,8 +948,7 @@ document.getElementById('glass-btn-2').dataset.config = JSON.stringify({
 document.getElementById('glass-video-ctrl').dataset.config = JSON.stringify({
 	cornerRadius: 20,
 	zRadius: 20,
-	blurAmount: 0.15,
-	frostAmount: 0.8,
+	blurAmount: 0.4,
 	brightness: -0.1,
 });
 document.getElementById('glass-magnifier').dataset.config = JSON.stringify({
@@ -961,7 +957,6 @@ document.getElementById('glass-magnifier').dataset.config = JSON.stringify({
 	zRadius: 30,
 	floating: true,
 	blurAmount: 0,
-	frostAmount: 0,
 	refraction: 1.2,
 	edgeHighlight: 0.15,
 	shadowOpacity: 0.2,
@@ -974,20 +969,18 @@ document.getElementById('glass-fp1').dataset.config = JSON.stringify({
 document.getElementById('glass-fp2').dataset.config = JSON.stringify({
 	floating: true,
 	cornerRadius: 40,
-	blurAmount: 0.25,
-	frostAmount: 1,
+	blurAmount: 0.5,
 });
 document.getElementById('glass-fp3').dataset.config = JSON.stringify({
 	floating: true,
 	cornerRadius: 40,
 	brightness: -0.3,
-	frostAmount: 0.95,
+	blurAmount: 0.4,
 });
 document.getElementById('glass-tab-indicator').dataset.config = JSON.stringify({
 	cornerRadius: 16,
 	zRadius: 16,
-	blurAmount: 0,
-	frostAmount: 0.4,
+	blurAmount: 0.2,
 	edgeHighlight: 0.2,
 	shadowOpacity: 0.25,
 });
@@ -1080,8 +1073,7 @@ setInterval(() => {
 // INTERACTIVE PLAYGROUND
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const pgParams = [
-	{ key: 'blurAmount',     label: 'Blur Amount',     min: 0, max: 1,   step: 0.01, def: 0 },
-	{ key: 'frostAmount',    label: 'Frost Amount',    min: 0, max: 1,   step: 0.01, def: 1 },
+	{ key: 'blurAmount',     label: 'Blur Amount',     min: 0, max: 1,   step: 0.01, def: 0.25 },
 	{ key: 'refraction',     label: 'Refraction',      min: 0, max: 2,   step: 0.01, def: 0.69 },
 	{ key: 'chromAberration',label: 'Chrom. Aberration',min: 0, max: 0.3, step: 0.005, def: 0.05 },
 	{ key: 'edgeHighlight',  label: 'Edge Highlight',  min: 0, max: 1,   step: 0.01, def: 0.05 },
@@ -1138,7 +1130,6 @@ await LiquidGlass.init({
 // ── Preview: Frosted ──
 document.querySelector('.liquid-glass-preview-frost').dataset.config = JSON.stringify({
 	blurAmount: 0.25,
-	frostAmount: 1,
 	cornerRadius: 30,
 	floating: true,
 });
@@ -1150,7 +1141,7 @@ await LiquidGlass.init({
 // ── Preview: Dark ──
 document.querySelector('.liquid-glass-preview-dark').dataset.config = JSON.stringify({
 	brightness: -0.3,
-	frostAmount: 0.95,
+	blurAmount: 0.25,
 	cornerRadius: 50,
 	floating: true,
 });
@@ -1176,7 +1167,6 @@ document.querySelector('.liquid-glass-preview-mag').dataset.config = JSON.string
 	zRadius: 30,
 	floating: true,
 	blurAmount: 0,
-	frostAmount: 0,
 	refraction: 1.2,
 	edgeHighlight: 0.15,
 	shadowOpacity: 0.2,

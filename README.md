@@ -56,7 +56,7 @@ Or import directly via `<script type="module">`:
 
 1. **Non-glass children of the root** are rasterised onto a hidden canvas using `html-to-image` (which clones the subtree, inlines computed styles, and renders via SVG `foreignObject`). Static children are captured once and cached; children with `data-dynamic` (or any `<video>`) are re-captured every frame.
 2. **`<img>`, `<canvas>`, and `<video>`** are drawn directly via `ctx.drawImage` (faster than `html-to-image`, and the only way to capture live video frames).
-3. **Glass elements** receive an injected child `<canvas>` that displays the WebGL output. For each glass element, the renderer crops the compositing canvas at the panel's location, runs an optional Gaussian blur, then runs a fragment shader that applies refraction, frost, chromatic aberration, Fresnel reflection, multi-light specular highlights, an inner-stroke rim, and a drop shadow.
+3. **Glass elements** receive an injected child `<canvas>` that displays the WebGL output. For each glass element, the renderer crops the compositing canvas at the panel's location, runs an optional Gaussian blur, then runs a fragment shader that applies refraction, chromatic aberration, Fresnel reflection, multi-light specular highlights, an inner-stroke rim, and a drop shadow. The blurred sample is what the surface displays — the glass is always fully frosted.
 4. **Layered compositing** writes each rendered glass canvas back to the compositing canvas before the next glass element runs, so a glass element above another sees the lower one in its refraction.
 
 ## API
@@ -105,8 +105,7 @@ The library re-reads `data-config` whenever it changes (via a MutationObserver),
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `blurAmount` | `number` | `0.00` | Gaussian blur strength applied to the captured background (0&nbsp;– 1) |
-| `frostAmount` | `number` | `0.00` | Strength of a milky-white frosted overlay applied on top of the (optionally blurred) background. Independent of `blurAmount` (0&nbsp;– 1) |
+| `blurAmount` | `number` | `0.00` | Background blur — softens / frosts the captured background. The glass is always fully frosted; this controls how strongly (0&nbsp;– 1) |
 | `refraction` | `number` | `0.69` | How much the glass bends the image behind it |
 | `chromAberration` | `number` | `0.05` | Chromatic aberration / colour fringing at edges |
 | `edgeHighlight` | `number` | `0.05` | Edge glow / rim lighting intensity |

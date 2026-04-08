@@ -5,7 +5,7 @@
  * The rendering pipeline has three stages:
  *   1. Blit — copy / UV-transform a texture (used for background upload & downsample)
  *   2. Blur — 9-tap Gaussian blur in a single direction (run H then V, multiple passes)
- *   3. Glass — the core liquid-glass composite (refraction, frost, specular, shadow, etc.)
+ *   3. Glass — the core liquid-glass composite (refraction, specular, shadow, etc.)
  */
 
 // ──────────────────────────────────────────────
@@ -84,7 +84,7 @@ void main() {
 //   • Rounded-rect SDF with pill-bevel height field
 //   • Dual-surface (biconvex) refraction
 //   • Chromatic aberration (dispersion)
-//   • Multi-pass frost + blur mixing
+//   • Sample of the pre-blurred background (always fully frosted)
 //   • Fresnel, specular (multi-light Blinn-Phong), edge highlight
 //   • Cool glass tint, saturation, brightness
 //   • Drop shadow with offset
@@ -99,7 +99,6 @@ uniform vec2 u_size;           // panel px
 uniform float u_radius;        // corner radius px
 uniform vec2 u_res;
 
-uniform float u_frost;
 uniform float u_refract;
 uniform float u_chroma;
 uniform float u_edgeHL;
@@ -216,24 +215,19 @@ void main() {
 	vec2 caD = N.xy * caS * pxToUV;
 	vec2 base = v_screenUV + refr + micro;
 
-	// ── Background sample (already blurred by blurAmount in u_blurTex) ──
-	// u_blurTex holds either an unblurred copy of the bg (when
-	// blurAmount === 0) or a Gaussian-blurred version (when > 0), so
-	// blurAmount alone controls how soft the background looks. We
-	// don't need a separate sharp sample any more.
-	vec3 col = vec3(
+	vec3 sharp = vec3(
+		texture2D(u_bgTex,  base + caD).r,
+		texture2D(u_bgTex,  base).g,
+		texture2D(u_bgTex,  base - caD).b
+	);
+	vec3 blur = vec3(
 		texture2D(u_blurTex, base + caD).r,
 		texture2D(u_blurTex, base).g,
 		texture2D(u_blurTex, base - caD).b
 	);
-
-	// ── Frost: milky-white overlay, independent of blur ──
-	// More frost at the centre, less at the rim, mimicking how
-	// internal scattering in real frosted glass looks. Strength is
-	// independent of blurAmount so users can get blur-only,
-	// frost-only, or both.
-	float frostStrength = u_frost * (1.0 - edge * 0.15);
-	col = mix(col, vec3(1.0), frostStrength * 0.5);
+	// ── Frosting mix ──
+	float frostVar = (1.0 - edge * 0.15);
+	vec3 col = mix(sharp, blur, frostVar);
 
 	// ── Brightness ──
 	col *= 1.0 + u_brightness;
