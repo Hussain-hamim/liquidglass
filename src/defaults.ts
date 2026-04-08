@@ -8,7 +8,12 @@
 export interface GlassConfig {
 	/** Amount of background blur behind the glass (0 = none, 1 = maximum) */
 	blurAmount: number;
-	/** Frost/frosted-glass intensity (0 = clear, 1 = fully frosted) */
+	/**
+	 * Frost intensity — strength of a milky-white overlay applied on
+	 * top of the (optionally blurred) background. Independent of
+	 * blurAmount: set them separately for blur-only, frost-only, or
+	 * both. 0 = clear, 1 = strongly milky.
+	 */
 	frostAmount: number;
 	/** Refraction strength — how much the glass bends the image behind it */
 	refraction: number;
@@ -54,7 +59,7 @@ export interface GlassConfig {
 
 export const DEFAULTS: GlassConfig = {
 	blurAmount: 0.00,
-	frostAmount: 1.00,
+	frostAmount: 0.00,
 	refraction: 0.69,
 	chromAberration: 0.05,
 	edgeHighlight: 0.05,

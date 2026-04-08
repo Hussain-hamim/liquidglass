@@ -216,20 +216,24 @@ void main() {
 	vec2 caD = N.xy * caS * pxToUV;
 	vec2 base = v_screenUV + refr + micro;
 
-	vec3 sharp = vec3(
-		texture2D(u_bgTex,  base + caD).r,
-		texture2D(u_bgTex,  base).g,
-		texture2D(u_bgTex,  base - caD).b
-	);
-	vec3 blur = vec3(
+	// ── Background sample (already blurred by blurAmount in u_blurTex) ──
+	// u_blurTex holds either an unblurred copy of the bg (when
+	// blurAmount === 0) or a Gaussian-blurred version (when > 0), so
+	// blurAmount alone controls how soft the background looks. We
+	// don't need a separate sharp sample any more.
+	vec3 col = vec3(
 		texture2D(u_blurTex, base + caD).r,
 		texture2D(u_blurTex, base).g,
 		texture2D(u_blurTex, base - caD).b
 	);
 
-	// ── Frosting mix ──
-	float frostVar = u_frost * (1.0 - edge * 0.15);
-	vec3 col = mix(sharp, blur, frostVar);
+	// ── Frost: milky-white overlay, independent of blur ──
+	// More frost at the centre, less at the rim, mimicking how
+	// internal scattering in real frosted glass looks. Strength is
+	// independent of blurAmount so users can get blur-only,
+	// frost-only, or both.
+	float frostStrength = u_frost * (1.0 - edge * 0.15);
+	col = mix(col, vec3(1.0), frostStrength * 0.5);
 
 	// ── Brightness ──
 	col *= 1.0 + u_brightness;

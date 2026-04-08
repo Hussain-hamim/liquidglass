@@ -105,8 +105,8 @@ The library re-reads `data-config` whenever it changes (via a MutationObserver),
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `blurAmount` | `number` | `0.00` | Background blur intensity (0&nbsp;– 1) |
-| `frostAmount` | `number` | `1.00` | Frosted glass intensity — how much of the *blurred* sample is mixed in vs the sharp sample (0&nbsp;– 1) |
+| `blurAmount` | `number` | `0.00` | Gaussian blur strength applied to the captured background (0&nbsp;– 1) |
+| `frostAmount` | `number` | `0.00` | Strength of a milky-white frosted overlay applied on top of the (optionally blurred) background. Independent of `blurAmount` (0&nbsp;– 1) |
 | `refraction` | `number` | `0.69` | How much the glass bends the image behind it |
 | `chromAberration` | `number` | `0.05` | Chromatic aberration / colour fringing at edges |
 | `edgeHighlight` | `number` | `0.05` | Edge glow / rim lighting intensity |
