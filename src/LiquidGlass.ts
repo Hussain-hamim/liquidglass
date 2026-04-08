@@ -2,7 +2,7 @@
  * LiquidGlass — main orchestrator for the liquid glass effect library.
  *
  * Coordinates between:
- *   - HtmlCapture  (renders DOM elements onto a hidden 2D canvas)
+ *   - HtmlCapture  (captures individual DOM elements into reusable canvases)
  *   - GlassRenderer (WebGL pipeline for the glass effect)
  *
  * Handles child ordering, layered compositing, floating (drag)
@@ -57,6 +57,13 @@ interface ObjectFitRect {
 	sy: number;
 	sw: number;
 	sh: number;
+}
+
+interface SampleRect {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
 }
 
 const BUTTON_CLASS = 'liquid-glass-button';
@@ -115,6 +122,8 @@ export class LiquidGlass {
 	private readonly _glassLastSize = new Map<HTMLElement, SizeEntry>();
 	private readonly _buttonStates = new Map<HTMLElement, ButtonState>();
 	private readonly _buttonListeners = new Map<HTMLElement, Array<() => void>>();
+	private readonly _sceneCanvas: HTMLCanvasElement;
+	private readonly _sceneCtx: CanvasRenderingContext2D;
 
 	private readonly _drag: DragState = {
 		active: false,
@@ -148,6 +157,8 @@ export class LiquidGlass {
 		// stale cache was refreshed in the background.
 		this.capture.onCacheUpdate = () => { this._dirty = true; };
 		this.renderer = new GlassRenderer();
+		this._sceneCanvas = document.createElement('canvas');
+		this._sceneCtx = this._sceneCanvas.getContext('2d')!;
 
 		// When the WebGL context is restored, invalidate all caches so
 		// the render loop rebuilds everything on the next frame.
@@ -183,8 +194,8 @@ export class LiquidGlass {
 		await this._captureGlassContent();
 		// Pre-warm the static-content cache so the first rendered frame
 		// has real DOM behind every glass panel — without this, the
-		// shader briefly samples the empty (white) compositing canvas
-		// while async html-to-image captures resolve.
+		// shader briefly samples an empty (white) local scene while
+		// async html-to-image captures resolve.
 		await this._prewarmStaticCaptures();
 
 		window.addEventListener('resize', this._onResize);
@@ -382,8 +393,8 @@ export class LiquidGlass {
 	 * Synchronously walk every non-glass direct child of root and
 	 * await its html-to-image capture so the cache is fully populated
 	 * by the time the render loop starts. Without this, the first
-	 * frame's glass shader sees the empty (white) compositing canvas
-	 * for ~one or two frames while the async captures resolve.
+	 * frame's glass shader sees an empty (white) local scene for
+	 * ~one or two frames while the async captures resolve.
 	 */
 	private async _prewarmStaticCaptures(): Promise<void> {
 		for (const child of this._sortedChildren) {
@@ -436,8 +447,8 @@ export class LiquidGlass {
 	 * when its z-index participates in painting order. Mirrors the spec:
 	 * https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_positioned_layout/Stacking_context
 	 *
-	 * Used by `_getSortedChildren` to decide painting order on the
-	 * compositing canvas. The set of triggers needs to match the
+	 * Used by `_getSortedChildren` to decide painting order for the
+	 * local scene assembly. The set of triggers needs to match the
 	 * browser's actual stacking model — otherwise overlays end up
 	 * painted before the background image and get erased.
 	 */
@@ -551,11 +562,9 @@ export class LiquidGlass {
 	private _handleResize(): void {
 		const dpr = window.devicePixelRatio || 1;
 		const rect = this.root.getBoundingClientRect();
-		const w = Math.round(rect.width * dpr);
-		const h = Math.round(rect.height * dpr);
 
-		this.capture.resize(w, h, dpr);
-		this.renderer.resize(w, h);
+		this.capture.resize(dpr);
+		this.renderer.resize(Math.round(rect.width * dpr), Math.round(rect.height * dpr));
 
 		for (const el of this.glassSet) {
 			this._updateGlassCanvasSize(el);
@@ -777,16 +786,11 @@ export class LiquidGlass {
 		const needsRender = this._dirty || this._hasDynamic || isDragging;
 		if (!needsRender) return;
 
-		this.capture.clear();
-
 		let bgChanged = this._dirty;
 
 		for (const child of this._sortedChildren) {
-			if (this.glassSet.has(child)) {
-				bgChanged = this._renderGlassElement(child, rootRect, dpr, isDragging, bgChanged);
-			} else {
-				bgChanged = this._captureNonGlassChild(child, rootRect, dpr, bgChanged);
-			}
+			if (!this.glassSet.has(child)) continue;
+			bgChanged = this._renderGlassElement(child, rootRect, dpr, isDragging, bgChanged);
 		}
 
 		if (this._dirty) {
@@ -795,8 +799,8 @@ export class LiquidGlass {
 	}
 
 	/**
-	 * Render a single glass element: run the shader if needed,
-	 * composite it onto the hidden canvas, then blit its content image.
+	 * Render a single glass element by composing just the scene region
+	 * that can affect it, then running the shader over that local input.
 	 * Returns the updated bgChanged flag.
 	 */
 	private _renderGlassElement(
@@ -814,25 +818,27 @@ export class LiquidGlass {
 		const centerY = (elRect.top - rootRect.top) + elRect.height / 2;
 		const glassCanvas = this.glassCanvases.get(child);
 		const isBeingDragged = isDragging && this._drag.element === child;
+		const sampleRect = this._getSampleRect(elRect, rootRect, dpr);
 
 		const cached = this._glassCache.get(child);
 		const posChanged = !cached
 			|| Math.abs(cached.centerX - centerX) > 0.5
 			|| Math.abs(cached.centerY - centerY) > 0.5;
+		const hasDynamicContributors = this._hasDynamic
+			&& this._glassHasDynamicContributors(child, sampleRect, rootRect, dpr);
 
 		const needsShaderRender = isDragging
-			? (isBeingDragged || bgChanged)
-			: (!cached || posChanged || bgChanged);
+			? (isBeingDragged || bgChanged || this._dirty || hasDynamicContributors)
+			: (!cached || posChanged || bgChanged || this._dirty || hasDynamicContributors);
 
 		if (needsShaderRender && glassCanvas) {
-			const cropX = Math.round((elRect.left - rootRect.left - SHADOW_PAD) * dpr);
-			const cropY = Math.round((elRect.top - rootRect.top - SHADOW_PAD) * dpr);
+			this._composeSceneForGlass(child, sampleRect, rootRect, dpr);
 			this.renderer.uploadAndBlur(
-				this.capture.canvas,
-				cropX,
-				cropY,
-				glassCanvas.width,
-				glassCanvas.height,
+				this._sceneCanvas,
+				0,
+				0,
+				sampleRect.w,
+				sampleRect.h,
 				config.blurAmount,
 			);
 			this.renderer.clear();
@@ -855,79 +861,111 @@ export class LiquidGlass {
 			bgChanged = true;
 		}
 
-		// Composite glass onto hidden canvas for higher layers
-		this._blitGlassShader(child, elRect, rootRect, dpr);
-
-		const contentImg = this._glassContentImages.get(child);
-		if (contentImg) {
-			const cx = (elRect.left - rootRect.left) * dpr;
-			const cy = (elRect.top - rootRect.top) * dpr;
-			const cw = elRect.width * dpr;
-			const ch = elRect.height * dpr;
-			this.capture.ctx.drawImage(contentImg, cx, cy, cw, ch);
-		}
-
 		return bgChanged;
 	}
 
 	/**
-	 * Capture a non-glass direct child of root onto the compositing canvas.
-	 * If the child is a simple media element (img/video/canvas), draw it
-	 * via the fast path. Otherwise, recursively find media elements inside
-	 * it and draw them, then fall back to html-to-image for the rest.
-	 * Returns the updated bgChanged flag.
+	 * Build the local input scene for a glass panel by walking only the
+	 * contributors that paint before it in the stacking order.
 	 */
-	private _captureNonGlassChild(
-		child: HTMLElement,
+	private _composeSceneForGlass(
+		currentGlass: HTMLElement,
+		sampleRect: SampleRect,
 		rootRect: DOMRect,
 		dpr: number,
-		bgChanged: boolean,
+	): void {
+		this._prepareSceneCanvas(sampleRect.w, sampleRect.h);
+
+		for (const child of this._sortedChildren) {
+			if (child === currentGlass) break;
+			if (this.glassSet.has(child)) {
+				this._drawPriorGlassToScene(child, sampleRect, rootRect, dpr);
+			} else {
+				this._drawNonGlassChildToScene(child, sampleRect, rootRect, dpr);
+			}
+		}
+	}
+
+	private _prepareSceneCanvas(width: number, height: number): void {
+		if (this._sceneCanvas.width !== width || this._sceneCanvas.height !== height) {
+			this._sceneCanvas.width = width;
+			this._sceneCanvas.height = height;
+		} else {
+			this._sceneCtx.clearRect(0, 0, width, height);
+		}
+		this._sceneCtx.fillStyle = '#ffffff';
+		this._sceneCtx.fillRect(0, 0, width, height);
+	}
+
+	private _glassHasDynamicContributors(
+		currentGlass: HTMLElement,
+		sampleRect: SampleRect,
+		rootRect: DOMRect,
+		dpr: number,
 	): boolean {
+		for (const child of this._sortedChildren) {
+			if (child === currentGlass) break;
+			if (this.glassSet.has(child)) continue;
+			if (!this._childHasDynamicContent(child)) continue;
+			if (this._childTouchesSample(child, sampleRect, rootRect, dpr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private _childHasDynamicContent(child: HTMLElement): boolean {
+		if (child.hasAttribute('data-dynamic')) return true;
+		if (child.tagName === 'VIDEO') return true;
+		return child.querySelector('[data-dynamic], video') !== null;
+	}
+
+	private _drawNonGlassChildToScene(
+		child: HTMLElement,
+		sampleRect: SampleRect,
+		rootRect: DOMRect,
+		dpr: number,
+	): void {
 		const tag = child.tagName;
 
 		if (tag === 'CANVAS' || tag === 'IMG' || tag === 'VIDEO') {
-			// Direct-child media element — fast path
-			const drew = this._drawMediaElement(child, rootRect, dpr);
-			if (drew && child.hasAttribute('data-dynamic')) bgChanged = true;
-			return bgChanged;
+			this._drawMediaElement(child, this._sceneCtx, sampleRect, rootRect, dpr);
+			return;
 		}
 
-		// It's a wrapper div. Draw any media descendants it contains
-		// via the fast path (since html-to-image can't render video).
-		const hasDynamic = this._captureMediaDescendants(child, rootRect, dpr);
-		if (hasDynamic) bgChanged = true;
+		this._captureMediaDescendants(child, this._sceneCtx, sampleRect, rootRect, dpr);
+		if (!this._elementTouchesSample(child, sampleRect, rootRect, dpr)) {
+			return;
+		}
 
-		// Also capture the wrapper's HTML content via html-to-image
-		// (for text, styled divs, etc.). This is additive — the media
-		// fast paths above already drew the video/img/canvas frames.
-		// captureElement always blits any cached canvas (stretched if
-		// the size has shifted), so the compositing canvas never has
-		// a transparent gap at the wrapper's location while async
-		// re-captures run in the background.
 		const isDynamic = child.hasAttribute('data-dynamic');
 		const hadCache = this.capture.cache.has(child);
 		this.capture.captureElement(child, isDynamic);
-		if (!hadCache) {
+		const rect = this._getPixelRect(child.getBoundingClientRect(), rootRect, dpr);
+		const drew = this.capture.drawCachedElement(
+			child,
+			this._sceneCtx,
+			rect.x - sampleRect.x,
+			rect.y - sampleRect.y,
+			rect.w,
+			rect.h,
+		);
+		if (!drew && !hadCache) {
 			this._dirty = true;
 		}
-		if (isDynamic) {
-			bgChanged = true;
-		}
-
-		return bgChanged;
 	}
 
 	/**
 	 * Recursively find and draw all img/video/canvas elements inside
 	 * a wrapper, skipping any glass elements and their injected canvases.
-	 * Returns true if any dynamic media was drawn.
 	 */
 	private _captureMediaDescendants(
 		parent: HTMLElement,
+		targetCtx: CanvasRenderingContext2D,
+		sampleRect: SampleRect,
 		rootRect: DOMRect,
 		dpr: number,
-	): boolean {
-		let hasDynamic = false;
+	): void {
 		const mediaEls = parent.querySelectorAll('img, video, canvas');
 		for (const el of mediaEls) {
 			const htmlEl = el as HTMLElement;
@@ -938,24 +976,26 @@ export class LiquidGlass {
 			}
 			if (isGlassCanvas) continue;
 
-			const drew = this._drawMediaElement(htmlEl, rootRect, dpr);
-			if (drew) hasDynamic = true;
+			this._drawMediaElement(htmlEl, targetCtx, sampleRect, rootRect, dpr);
 		}
-		return hasDynamic;
 	}
 
-	/** Draw a single img/video/canvas onto the compositing canvas. Returns true if drawn. */
+	/** Draw a single img/video/canvas into a local scene canvas. */
 	private _drawMediaElement(
 		el: HTMLElement,
+		targetCtx: CanvasRenderingContext2D,
+		sampleRect: SampleRect,
 		rootRect: DOMRect,
 		dpr: number,
 	): boolean {
 		const tag = el.tagName;
 		const r = el.getBoundingClientRect();
-		const dx = (r.left - rootRect.left) * dpr;
-		const dy = (r.top - rootRect.top) * dpr;
-		const dw = r.width * dpr;
-		const dh = r.height * dpr;
+		if (!this._elementTouchesSample(el, sampleRect, rootRect, dpr)) return false;
+		const rect = this._getPixelRect(r, rootRect, dpr);
+		const dx = rect.x - sampleRect.x;
+		const dy = rect.y - sampleRect.y;
+		const dw = rect.w;
+		const dh = rect.h;
 
 		// Hidden / collapsed media element — nothing to draw, but
 		// drawImage with zero dimensions throws InvalidStateError, so
@@ -965,24 +1005,47 @@ export class LiquidGlass {
 		if (tag === 'CANVAS') {
 			const liveCanvas = el as HTMLCanvasElement;
 			if (liveCanvas.width <= 0 || liveCanvas.height <= 0) return false;
-			this.capture.ctx.drawImage(liveCanvas, dx, dy, dw, dh);
+			targetCtx.drawImage(liveCanvas, dx, dy, dw, dh);
 			return true;
 		} else if (tag === 'IMG') {
 			const img = el as HTMLImageElement;
 			if (!img.complete || img.naturalWidth === 0) return false;
-			this._drawMediaFitted(img, img.naturalWidth, img.naturalHeight, el, r, dx, dy, dw, dh);
+			this._drawMediaFitted(
+				targetCtx,
+				img,
+				img.naturalWidth,
+				img.naturalHeight,
+				el,
+				r,
+				dx,
+				dy,
+				dw,
+				dh,
+			);
 			return true;
 		} else if (tag === 'VIDEO') {
 			const vid = el as HTMLVideoElement;
 			if (vid.readyState < 2) return false;
-			this._drawMediaFitted(vid, vid.videoWidth, vid.videoHeight, el, r, dx, dy, dw, dh);
+			this._drawMediaFitted(
+				targetCtx,
+				vid,
+				vid.videoWidth,
+				vid.videoHeight,
+				el,
+				r,
+				dx,
+				dy,
+				dw,
+				dh,
+			);
 			return true;
 		}
 		return false;
 	}
 
-	/** Draw an img or video onto the compositing canvas, respecting object-fit. */
+	/** Draw an img or video onto a local scene canvas, respecting object-fit. */
 	private _drawMediaFitted(
+		targetCtx: CanvasRenderingContext2D,
 		mediaEl: HTMLImageElement | HTMLVideoElement,
 		natW: number,
 		natH: number,
@@ -998,25 +1061,124 @@ export class LiquidGlass {
 			const fit = computed.objectFit || 'fill';
 			const pos = computed.objectPosition || '50% 50%';
 			const src = LiquidGlass._objectFitRect(natW, natH, r.width, r.height, fit, pos);
-			this.capture.ctx.drawImage(mediaEl, src.sx, src.sy, src.sw, src.sh, dx, dy, dw, dh);
+			targetCtx.drawImage(mediaEl, src.sx, src.sy, src.sw, src.sh, dx, dy, dw, dh);
 		} else {
-			this.capture.ctx.drawImage(mediaEl, dx, dy, dw, dh);
+			targetCtx.drawImage(mediaEl, dx, dy, dw, dh);
 		}
 	}
 
-	private _blitGlassShader(
+	private _drawPriorGlassToScene(
 		child: HTMLElement,
-		elRect: DOMRect,
+		sampleRect: SampleRect,
 		rootRect: DOMRect,
 		dpr: number,
 	): void {
 		const glassCanvas = this.glassCanvases.get(child);
-		if (!glassCanvas) return;
-		const compX = (elRect.left - rootRect.left - SHADOW_PAD) * dpr;
-		const compY = (elRect.top - rootRect.top - SHADOW_PAD) * dpr;
-		const compW = (elRect.width + SHADOW_PAD * 2) * dpr;
-		const compH = (elRect.height + SHADOW_PAD * 2) * dpr;
-		this.capture.compositeGlass(glassCanvas, compX, compY, compW, compH);
+		const elRect = child.getBoundingClientRect();
+		if (glassCanvas) {
+			const shaderRect = this._getPixelRect(elRect, rootRect, dpr, SHADOW_PAD);
+			if (LiquidGlass._rectsIntersect(shaderRect, sampleRect)) {
+				this._sceneCtx.drawImage(
+					glassCanvas,
+					0,
+					0,
+					glassCanvas.width,
+					glassCanvas.height,
+					shaderRect.x - sampleRect.x,
+					shaderRect.y - sampleRect.y,
+					shaderRect.w,
+					shaderRect.h,
+				);
+			}
+		}
+
+		const contentImg = this._glassContentImages.get(child);
+		if (!contentImg) return;
+		const contentRect = this._getPixelRect(elRect, rootRect, dpr);
+		if (!LiquidGlass._rectsIntersect(contentRect, sampleRect)) return;
+		this._sceneCtx.drawImage(
+			contentImg,
+			contentRect.x - sampleRect.x,
+			contentRect.y - sampleRect.y,
+			contentRect.w,
+			contentRect.h,
+		);
+	}
+
+	private _getSampleRect(
+		elRect: DOMRect,
+		rootRect: DOMRect,
+		dpr: number,
+	): SampleRect {
+		return this._getPixelRect(elRect, rootRect, dpr, SHADOW_PAD);
+	}
+
+	private _getPixelRect(
+		rect: DOMRect,
+		rootRect: DOMRect,
+		dpr: number,
+		pad = 0,
+	): SampleRect {
+		return {
+			x: Math.round((rect.left - rootRect.left - pad) * dpr),
+			y: Math.round((rect.top - rootRect.top - pad) * dpr),
+			w: Math.round((rect.width + pad * 2) * dpr),
+			h: Math.round((rect.height + pad * 2) * dpr),
+		};
+	}
+
+	private _childTouchesSample(
+		child: HTMLElement,
+		sampleRect: SampleRect,
+		rootRect: DOMRect,
+		dpr: number,
+	): boolean {
+		if (this._elementTouchesSample(child, sampleRect, rootRect, dpr)) return true;
+
+		for (const el of child.querySelectorAll('[data-dynamic], video')) {
+			if (this._elementTouchesSample(el as HTMLElement, sampleRect, rootRect, dpr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private _elementTouchesSample(
+		element: HTMLElement,
+		sampleRect: SampleRect,
+		rootRect: DOMRect,
+		dpr: number,
+	): boolean {
+		const pad = this._getPaintOverflowPad(element);
+		const bounds = this._getPixelRect(element.getBoundingClientRect(), rootRect, dpr, pad);
+		return LiquidGlass._rectsIntersect(bounds, sampleRect);
+	}
+
+	private _getPaintOverflowPad(element: HTMLElement): number {
+		if (this.glassSet.has(element)) return SHADOW_PAD;
+
+		const style = getComputedStyle(element);
+		const backdropFilter = style.backdropFilter
+			|| (style as CSSStyleDeclaration & { webkitBackdropFilter?: string }).webkitBackdropFilter;
+		const maskImage = style.maskImage
+			|| (style as CSSStyleDeclaration & { webkitMaskImage?: string }).webkitMaskImage;
+
+		const paintsOutsideBounds =
+			(style.boxShadow && style.boxShadow !== 'none')
+			|| (style.textShadow && style.textShadow !== 'none')
+			|| (style.filter && style.filter !== 'none')
+			|| (backdropFilter && backdropFilter !== 'none')
+			|| (maskImage && maskImage !== 'none')
+			|| (style.mixBlendMode && style.mixBlendMode !== 'normal');
+
+		return paintsOutsideBounds ? SHADOW_PAD : 0;
+	}
+
+	private static _rectsIntersect(a: SampleRect, b: SampleRect): boolean {
+		return a.x < b.x + b.w
+			&& a.x + a.w > b.x
+			&& a.y < b.y + b.h
+			&& a.y + a.h > b.y;
 	}
 
 	/** Compute the source rectangle for drawImage that replicates CSS object-fit / object-position. */

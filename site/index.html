@@ -218,7 +218,7 @@ body {
 		background: rgba(255,255,255,0.93);
 		z-index: 1;
 		overflow: hidden;
-		min-height: 200px;
+		align-self: stretch;
 		display: flex;
 		flex-flow: column nowrap;
 		justify-content: center;
@@ -658,7 +658,7 @@ code[class*="language-"] {
 
 	<!-- Video wrap — its own LiquidGlass root for the controls overlay -->
 	<div class="hero-video-wrap" id="video-root" data-dynamic>
-		<video id="hero-video" src="video.mp4" autoplay muted loop playsinline data-dynamic></video>
+		<video id="hero-video" src="video.mp4" autoplay muted loop playsinline></video>
 		<div class="glass-video-ctrl" id="glass-video-ctrl">
 			<span class="label">
 				<button class="video-play-btn" id="video-play-btn"><span class="material-symbols-outlined">pause</span></button>
@@ -672,8 +672,8 @@ code[class*="language-"] {
 
 	<!-- Magnifier wrap — its own LiquidGlass root for the dome -->
 	<div class="hero-mag-wrap" id="magnifier-root" data-dynamic>
-		<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt.</p>
 		<div class="hero-magnifier" id="glass-magnifier"></div>
+		<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt.</p>
 	</div>
 
 	<!-- Floating glass panels (direct children of root, draggable) -->

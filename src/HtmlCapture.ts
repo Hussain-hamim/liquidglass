@@ -1,5 +1,5 @@
 /**
- * HtmlCapture — renders DOM elements onto a hidden 2D canvas.
+ * HtmlCapture — manages cached DOM-to-canvas snapshots for individual elements.
  *
  * Uses the `html-to-image` library to rasterise DOM nodes into
  * canvas-ready images.  The library handles style inlining, font
@@ -13,16 +13,12 @@ import { toCanvas } from 'html-to-image';
 
 interface CacheEntry {
 	canvas: HTMLCanvasElement;
-	x: number;
-	y: number;
 	w: number;
 	h: number;
 }
 
 export class HtmlCapture {
 	readonly root: HTMLElement;
-	readonly canvas: HTMLCanvasElement;
-	readonly ctx: CanvasRenderingContext2D;
 	readonly cache: Map<HTMLElement, CacheEntry>;
 	dpr: number;
 	/** Elements with an in-flight html-to-image re-capture (dedupe). */
@@ -39,12 +35,6 @@ export class HtmlCapture {
 
 	constructor(root: HTMLElement) {
 		this.root = root;
-
-		this.canvas = document.createElement('canvas');
-		this.canvas.style.display = 'none';
-		document.body.appendChild(this.canvas);
-
-		this.ctx = this.canvas.getContext('2d')!;
 		this.cache = new Map();
 		this.dpr = 1;
 	}
@@ -150,77 +140,45 @@ export class HtmlCapture {
 	}
 
 	/**
-	 * Resize the hidden canvas to match the root element.
+	 * Update the device pixel ratio used for future captures.
 	 */
-	resize(width: number, height: number, dpr = 1): void {
-		this.canvas.width = width;
-		this.canvas.height = height;
+	resize(dpr = 1): void {
 		this.dpr = dpr;
-		// Invalidate all caches on resize since positions / sizes change
+		// Invalidate all caches on resize since element sizes change.
 		this.cache.clear();
 	}
 
 	/**
-	 * Draw an element onto the hidden compositing canvas at its current
-	 * bounding rect, ensuring the cache is fresh.
+	 * Ensure an element's cached canvas is fresh enough for the current DPR.
 	 *
 	 * Cache semantics:
-	 *   - Fresh hit (size matches within 0.5 px) → blit cached canvas
-	 *     at the current x/y. Done.
-	 *   - Stale hit (size differs) → blit cached canvas STRETCHED at
-	 *     the current x/y (better than a transparent gap), AND kick
-	 *     off an async re-capture. The stale entry stays in the cache
-	 *     until the new capture is ready to overwrite it; future
-	 *     frames keep blitting it stretched in the meantime.
-	 *   - Cache miss → kick off an async capture. Nothing is drawn
-	 *     this call; the caller should set _dirty so a future frame
-	 *     re-runs once the async completes.
+	 *   - Fresh hit (size matches within 0.5 px) → return immediately.
+	 *   - Stale hit (size differs) → keep the stale entry so callers can
+	 *     stretch-blit it, and kick off an async re-capture.
+	 *   - Cache miss → kick off an async capture.
 	 *
 	 * Concurrent re-captures for the same element are deduplicated
 	 * via the `_capturing` set, so calling this every frame is cheap.
 	 */
 	async captureElement(element: HTMLElement, force = false): Promise<void> {
-		const rootRect = this.root.getBoundingClientRect();
 		const rect = element.getBoundingClientRect();
 		const cssW = rect.width;
 		const cssH = rect.height;
-		// Pixel-snap the destination rect: drawImage with fractional
-		// destination coordinates linearly interpolates the source
-		// canvas, blurring and shifting the captured glyphs by ~1
-		// device pixel. Snapping to integer device pixels keeps the
-		// captured raster pixel-aligned with the live DOM glyphs the
-		// browser renders underneath the glass.
-		const x = Math.round((rect.left - rootRect.left) * this.dpr);
-		const y = Math.round((rect.top - rootRect.top) * this.dpr);
 		const w = Math.round(cssW * this.dpr);
 		const h = Math.round(cssH * this.dpr);
 
-		// Hidden / collapsed element — nothing to draw or capture. Drop
-		// any stale cache entry so a future re-show triggers a fresh
-		// capture instead of blitting a zero-sized source canvas.
+		// Hidden / collapsed element — nothing to capture.
 		if (w <= 0 || h <= 0) {
 			this.cache.delete(element);
 			return;
 		}
 
-		// Always blit any existing cache first — even if stale — so the
-		// compositing canvas never has a transparent hole at this
-		// element's location while async work runs in the background.
-		let cacheIsFresh = false;
 		const cached = this.cache.get(element);
-		if (cached) {
-			// Guard against a previously-cached zero-sized canvas (e.g.
-			// from an element that was display:none at capture time).
-			if (cached.canvas.width > 0 && cached.canvas.height > 0) {
-				this.ctx.drawImage(cached.canvas, x, y, w, h);
-				cached.x = x;
-				cached.y = y;
-				cacheIsFresh =
-					Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5;
-			} else {
-				this.cache.delete(element);
-			}
-		}
+		const cacheIsFresh = !!cached
+			&& cached.canvas.width > 0
+			&& cached.canvas.height > 0
+			&& Math.abs(cached.w - w) < 0.5
+			&& Math.abs(cached.h - h) < 0.5;
 
 		if (!force && cacheIsFresh) return;
 
@@ -230,21 +188,37 @@ export class HtmlCapture {
 
 		// Canvas elements are drawn directly via the fast path.
 		if (element.tagName === 'CANVAS') {
-			if (!cached) {
-				const liveCanvas = element as HTMLCanvasElement;
-				if (liveCanvas.width > 0 && liveCanvas.height > 0) {
-					this.ctx.drawImage(liveCanvas, x, y, w, h);
-				}
-			}
 			return;
 		}
 
 		this._capturing.add(element);
 		try {
-			await this._captureWithHtmlToImage(element, x, y, w, h, cssW, cssH);
+			await this._captureWithHtmlToImage(element, w, h, cssW, cssH);
 		} finally {
 			this._capturing.delete(element);
 		}
+	}
+
+	/**
+	 * Draw the current cached capture for an element into an arbitrary
+	 * 2D canvas. Returns true when a cached snapshot was available.
+	 */
+	drawCachedElement(
+		element: HTMLElement,
+		targetCtx: CanvasRenderingContext2D,
+		x: number,
+		y: number,
+		w: number,
+		h: number,
+	): boolean {
+		const cached = this.cache.get(element);
+		if (!cached) return false;
+		if (cached.canvas.width <= 0 || cached.canvas.height <= 0) {
+			this.cache.delete(element);
+			return false;
+		}
+		targetCtx.drawImage(cached.canvas, x, y, w, h);
+		return true;
 	}
 
 	/**
@@ -305,30 +279,9 @@ export class HtmlCapture {
 		this.cache.delete(element);
 	}
 
-	/**
-	 * Draw a rendered glass canvas onto the hidden canvas (for layered
-	 * compositing — higher glass elements need to see lower ones).
-	 */
-	compositeGlass(
-		glassCanvas: HTMLCanvasElement,
-		x: number,
-		y: number,
-		w: number,
-		h: number,
-	): void {
-		this.ctx.drawImage(glassCanvas, 0, 0, glassCanvas.width, glassCanvas.height, x, y, w, h);
-	}
-
-	/** Clear the hidden canvas (filled white — matches a typical page background). */
-	clear(): void {
-		this.ctx.fillStyle = '#ffffff';
-		this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-	}
-
 	/** Destroy the capture system and free resources. */
 	destroy(): void {
 		this.cache.clear();
-		this.canvas.remove();
 	}
 
 	// ────────────────────────────────────────────
@@ -337,8 +290,6 @@ export class HtmlCapture {
 
 	private async _captureWithHtmlToImage(
 		element: HTMLElement,
-		x: number,
-		y: number,
 		w: number,
 		h: number,
 		cssW: number,
@@ -369,11 +320,7 @@ export class HtmlCapture {
 				fontEmbedCSS: this._fontEmbedCSS,
 			});
 
-			// Store the new render in the cache. Do NOT draw to ctx
-			// here — the next call to captureElement on a future render
-			// frame will blit the refreshed entry. Drawing here would
-			// be wasted work since the canvas is cleared every frame.
-			this.cache.set(element, { canvas: rendered, x, y, w, h });
+			this.cache.set(element, { canvas: rendered, w, h });
 			this.onCacheUpdate?.();
 		} catch (err) {
 			console.warn('LiquidGlass: html-to-image capture failed for element:', element, err);
