@@ -180,24 +180,35 @@ body {
 		}
 	}
 
-	.video-slider {
+	.video-progress {
 		flex: 1;
-		height: 4px;
-		appearance: none;
-		background: rgba(255,255,255,0.3);
-		border-radius: 2px;
-		outline: none;
+		height: 6px;
+		background: rgba(255,255,255,0.25);
+		border-radius: 3px;
 		cursor: pointer;
 		pointer-events: auto;
+		position: relative;
+		overflow: hidden;
 
-		&::-webkit-slider-thumb {
-			-webkit-appearance: none;
-			width: 14px;
-			height: 14px;
-			border-radius: 50%;
+		.video-progress-fill {
+			position: absolute;
+			top: 0;
+			left: 0;
+			bottom: 0;
+			width: 0%;
 			background: #fff;
-			cursor: pointer;
+			border-radius: 3px;
 		}
+	}
+
+	.video-time {
+		font-size: 12px;
+		font-variant-numeric: tabular-nums;
+		color: rgba(255,255,255,0.85);
+		min-width: 36px;
+		text-align: right;
+		flex-shrink: 0;
+		pointer-events: none;
 	}
 
 	.hero-mag-wrap {
@@ -648,7 +659,10 @@ code[class*="language-"] {
 		<div class="glass-video-ctrl" id="glass-video-ctrl">
 			<span class="label">
 				<button class="video-play-btn" id="video-play-btn"><span class="material-symbols-outlined">pause</span></button>
-				<input type="range" class="video-slider" id="video-slider" min="0" max="1000" value="0">
+				<div class="video-progress" id="video-progress">
+					<div class="video-progress-fill" id="video-progress-fill"></div>
+				</div>
+				<span class="video-time" id="video-time">0:00</span>
 			</span>
 		</div>
 	</div>
@@ -854,14 +868,24 @@ instance.destroy();</code></pre>
 
 <!-- ━━━━━━━━━━━━ SCRIPTS ━━━━━━━━━━━━ -->
 <script>
-// ── Video player controls ──
+// ── Video player controls (custom HTML, no <input type="range">) ──
 (function () {
 	const video = document.getElementById('hero-video');
 	const playBtn = document.getElementById('video-play-btn');
-	const slider = document.getElementById('video-slider');
-	if (!video || !playBtn || !slider) return;
+	const progress = document.getElementById('video-progress');
+	const fill = document.getElementById('video-progress-fill');
+	const timeLabel = document.getElementById('video-time');
+	if (!video || !playBtn || !progress || !fill || !timeLabel) return;
 
 	const playIcon = playBtn.querySelector('.material-symbols-outlined');
+
+	function formatTime(secs) {
+		if (!isFinite(secs)) return '0:00';
+		const m = Math.floor(secs / 60);
+		const s = Math.floor(secs % 60);
+		return m + ':' + (s < 10 ? '0' + s : s);
+	}
+
 	playBtn.addEventListener('click', () => {
 		if (video.paused) {
 			video.play();
@@ -873,15 +897,33 @@ instance.destroy();</code></pre>
 	});
 
 	video.addEventListener('timeupdate', () => {
-		if (video.duration) {
-			slider.value = (video.currentTime / video.duration) * 1000;
-		}
+		if (!video.duration) return;
+		const pct = (video.currentTime / video.duration) * 100;
+		fill.style.width = pct + '%';
+		timeLabel.textContent = formatTime(video.currentTime);
 	});
 
-	slider.addEventListener('input', () => {
+	// Click + drag scrubbing on the progress bar.
+	let scrubbing = false;
+	function seekFromEvent(e) {
+		const rect = progress.getBoundingClientRect();
+		const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
 		if (video.duration) {
-			video.currentTime = (slider.value / 1000) * video.duration;
+			video.currentTime = ratio * video.duration;
+			fill.style.width = (ratio * 100) + '%';
 		}
+	}
+	progress.addEventListener('pointerdown', (e) => {
+		scrubbing = true;
+		progress.setPointerCapture(e.pointerId);
+		seekFromEvent(e);
+	});
+	progress.addEventListener('pointermove', (e) => {
+		if (scrubbing) seekFromEvent(e);
+	});
+	progress.addEventListener('pointerup', (e) => {
+		scrubbing = false;
+		progress.releasePointerCapture(e.pointerId);
 	});
 })();
 </script>
