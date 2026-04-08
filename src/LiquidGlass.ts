@@ -109,7 +109,13 @@ export class LiquidGlass {
 	private _hasDynamic = false;
 	private _dirty = true;
 	private _capturingGlassContent = false;
-	private _glassContentDirty = false;
+	/**
+	 * Glass elements whose content image is stale and needs to be
+	 * re-captured. Per-element rather than a single global flag so a
+	 * mutation inside one glass subtree only re-captures that one
+	 * element instead of every glass on the page.
+	 */
+	private readonly _glassContentDirty = new Set<HTMLElement>();
 	private _fpsFrames = 0;
 	private _fpsTime = 0;
 
@@ -215,7 +221,11 @@ export class LiquidGlass {
 					this._dirty = true;
 					continue;
 				}
-				this._glassContentDirty = true;
+				// Mark only the affected glass element as dirty, so a
+				// mutation inside one glass subtree doesn't force every
+				// other glass element to re-capture too.
+				const owner = this._closestGlassAncestor(mutation.target);
+				if (owner) this._glassContentDirty.add(owner);
 			}
 		});
 		for (const el of this.glassSet) {
@@ -227,7 +237,7 @@ export class LiquidGlass {
 				attributeFilter: ['data-config'],
 			});
 		}
-		this._glassContentDirty = false;
+		this._glassContentDirty.clear();
 
 		this._running = true;
 		this._dirty = true;
@@ -328,6 +338,24 @@ export class LiquidGlass {
 
 	}
 
+	/**
+	 * Walk up from a mutation target until we hit a glass element
+	 * registered on this instance. Returns null if the node isn't
+	 * inside any glass subtree (shouldn't normally happen since the
+	 * observers are scoped to glass elements, but the mutation target
+	 * may be a Text node or detached during a removal).
+	 */
+	private _closestGlassAncestor(node: Node): HTMLElement | null {
+		let cur: Node | null = node;
+		while (cur) {
+			if (cur.nodeType === 1 && this.glassSet.has(cur as HTMLElement)) {
+				return cur as HTMLElement;
+			}
+			cur = cur.parentNode;
+		}
+		return null;
+	}
+
 	private _setupButtonListeners(el: HTMLElement): void {
 		const state: ButtonState = { hover: false, pressed: false };
 		this._buttonStates.set(el, state);
@@ -357,22 +385,25 @@ export class LiquidGlass {
 	// ────────────────────────────────────────────
 
 	/**
-	 * Pre-capture each glass element's DOM content (text, icons, etc.)
-	 * into a standalone canvas, hiding the injected shader canvas so
-	 * it isn't included.
+	 * Re-capture the DOM content (text, icons, etc.) of glass elements
+	 * whose subtrees have been mutated since the last capture, hiding
+	 * the injected shader canvas so it isn't included.
 	 *
-	 * Guarded against concurrent execution: if a capture is already in
-	 * progress, the flag is re-set so a fresh capture runs after the
-	 * current one completes.
+	 * Pass `targets = null` to capture every glass element (used at
+	 * init and on resize); pass a Set to capture only specific ones.
+	 *
+	 * Guarded against concurrent execution: if a capture is already
+	 * running, the affected elements stay in `_glassContentDirty` and
+	 * the next render-loop tick picks them up.
 	 */
-	private async _captureGlassContent(): Promise<void> {
-		if (this._capturingGlassContent) {
-			this._glassContentDirty = true;
-			return;
-		}
+	private async _captureGlassContent(
+		targets: Set<HTMLElement> | null = null,
+	): Promise<void> {
+		if (this._capturingGlassContent) return;
 		this._capturingGlassContent = true;
 		try {
 			for (const [el, glassCanvas] of this.glassCanvases) {
+				if (targets && !targets.has(el)) continue;
 				const rect = el.getBoundingClientRect();
 				const img = await this.capture.captureToCanvas(
 					el,
@@ -571,7 +602,8 @@ export class LiquidGlass {
 		}
 
 		this._glassCache.clear();
-		this._glassContentDirty = true;
+		// Resize affects every glass canvas — mark all of them dirty.
+		for (const el of this.glassSet) this._glassContentDirty.add(el);
 		this._dirty = true;
 	}
 
@@ -614,11 +646,11 @@ export class LiquidGlass {
 				this._updateGlassCanvasSize(el);
 				this._glassCache.delete(el);
 				this.capture.invalidateCache(el);
+				// Only this element's content image needs to be
+				// re-captured, not every glass on the page.
+				this._glassContentDirty.add(el);
 				changed = true;
 			}
-		}
-		if (changed) {
-			this._glassContentDirty = true;
 		}
 		return changed;
 	}
@@ -764,9 +796,13 @@ export class LiquidGlass {
 			this._dirty = true;
 		}
 
-		if (this._glassContentDirty) {
-			this._glassContentDirty = false;
-			this._captureGlassContent();
+		if (this._glassContentDirty.size > 0 && !this._capturingGlassContent) {
+			// Snapshot the dirty set before draining: any mutations
+			// that arrive while the async capture is in flight stay
+			// in the live set and are picked up on the next tick.
+			const targets = new Set(this._glassContentDirty);
+			this._glassContentDirty.clear();
+			this._captureGlassContent(targets);
 		}
 
 		try {
