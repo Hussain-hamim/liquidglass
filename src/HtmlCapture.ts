@@ -17,6 +17,105 @@ interface CacheEntry {
 	h: number;
 }
 
+/**
+ * Document-level cache for the prefetched @font-face CSS, shared
+ * across every LiquidGlass instance on the page. The first call
+ * kicks off the fetch + base64 inlining; every subsequent call
+ * returns the same Promise instead of redoing the work. Cleared
+ * via `invalidateFontEmbedCache()`.
+ */
+let _sharedFontEmbedCSS: Promise<string> | null = null;
+
+/**
+ * Discard the shared font-embed cache so the next prefetch rebuilds
+ * it from scratch. Useful when stylesheets are added at runtime.
+ */
+export function invalidateFontEmbedCache(): void {
+	_sharedFontEmbedCSS = null;
+}
+
+async function buildFontEmbedCSS(): Promise<string> {
+	const cssTexts: string[] = [];
+
+	// 1. Fetch every <link rel="stylesheet"> directly. fetch() works
+	//    for cross-origin sheets that serve CORS-friendly responses
+	//    (Google Fonts, jsdelivr, unpkg, etc.).
+	const links = Array.from(
+		document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
+	);
+	for (const link of links) {
+		if (!link.href) continue;
+		try {
+			const res = await fetch(link.href);
+			if (res.ok) cssTexts.push(await res.text());
+		} catch {
+			// Network error or CORS blocked — skip this sheet.
+		}
+	}
+
+	// 2. Pick up inline same-origin @font-face rules from the page's
+	//    own <style> blocks. These are readable via CSSOM without
+	//    any cross-origin issues.
+	for (const sheet of Array.from(document.styleSheets)) {
+		if (sheet.href) continue;
+		try {
+			for (const rule of Array.from(sheet.cssRules || [])) {
+				if (rule.type === CSSRule.FONT_FACE_RULE) {
+					cssTexts.push(rule.cssText);
+				}
+			}
+		} catch {
+			// SecurityError — skip.
+		}
+	}
+
+	// 3. Extract every top-level @font-face block from the combined
+	//    CSS text via regex. This handles the standard Google Fonts
+	//    shape (each rule is a flat block at the top level).
+	const allCSS = cssTexts.join('\n');
+	const fontFaceBlocks = allCSS.match(/@font-face\s*\{[^}]*\}/gi) || [];
+
+	// 4. For each block, replace any url(...) reference with a base64
+	//    data URL fetched directly. The original URL may already be
+	//    a data: URL — leave those alone.
+	const embedded = await Promise.all(
+		fontFaceBlocks.map(async (block) => {
+			const urlRegex = /url\(\s*['"]?([^'")\s]+)['"]?\s*\)/g;
+			const matches = Array.from(block.matchAll(urlRegex));
+			let result = block;
+			for (const m of matches) {
+				const url = m[1];
+				if (url.startsWith('data:')) continue;
+				try {
+					const res = await fetch(url);
+					if (!res.ok) continue;
+					const blob = await res.blob();
+					const dataUrl = await new Promise<string>((resolve, reject) => {
+						const reader = new FileReader();
+						reader.onload = () => resolve(reader.result as string);
+						reader.onerror = reject;
+						reader.readAsDataURL(blob);
+					});
+					result = result.replace(m[0], `url(${dataUrl})`);
+				} catch {
+					// skip this URL
+				}
+			}
+			return result;
+		}),
+	);
+
+	const fontEmbedCSS = embedded.join('\n');
+	if (fontEmbedCSS === '') {
+		console.warn(
+			'LiquidGlass: no @font-face rules found on the page; '
+			+ 'captured rasters will use system fallback fonts and may '
+			+ 'misalign with the live DOM under glass elements.',
+		);
+	}
+	return fontEmbedCSS;
+}
+
 export class HtmlCapture {
 	readonly root: HTMLElement;
 	readonly cache: Map<HTMLElement, CacheEntry>;
@@ -44,12 +143,16 @@ export class HtmlCapture {
 	// ────────────────────────────────────────────
 
 	/**
-	 * Build the page's @font-face CSS once at init, with every src URL
-	 * resolved to a base64 data URL. The result is reused on every
-	 * subsequent toCanvas call so the captured raster renders text with
-	 * the page's actual webfonts (e.g. Inter) instead of system fallbacks.
-	 * Matching glyph metrics is what makes the refracted text line up
-	 * with the live DOM under the glass.
+	 * Resolve the page's @font-face rules into a single CSS string with
+	 * every `url(...)` source already inlined as a base64 data URL. The
+	 * result is reused on every subsequent toCanvas call so the captured
+	 * raster renders text with the page's actual webfonts (e.g. Inter)
+	 * instead of system fallbacks. Matching glyph metrics is what makes
+	 * the refracted text line up with the live DOM under the glass.
+	 *
+	 * The build is shared at module scope across every LiquidGlass
+	 * instance — the first init() pays the fetch + base64 cost, every
+	 * subsequent init() awaits the same Promise.
 	 *
 	 * Implemented manually rather than via html-to-image's getFontEmbedCSS
 	 * because that path walks document.styleSheets via CSSOM, which throws
@@ -59,84 +162,10 @@ export class HtmlCapture {
 	 * the @font-face blocks, and inline each url(...) ourselves.
 	 */
 	async prefetchFontEmbedCSS(): Promise<void> {
-		const cssTexts: string[] = [];
-
-		// 1. Fetch every <link rel="stylesheet"> directly. fetch() works
-		//    for cross-origin sheets that serve CORS-friendly responses
-		//    (Google Fonts, jsdelivr, unpkg, etc.).
-		const links = Array.from(
-			document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
-		);
-		for (const link of links) {
-			if (!link.href) continue;
-			try {
-				const res = await fetch(link.href);
-				if (res.ok) cssTexts.push(await res.text());
-			} catch {
-				// Network error or CORS blocked — skip this sheet.
-			}
+		if (!_sharedFontEmbedCSS) {
+			_sharedFontEmbedCSS = buildFontEmbedCSS();
 		}
-
-		// 2. Pick up inline same-origin @font-face rules from the page's
-		//    own <style> blocks. These are readable via CSSOM without
-		//    any cross-origin issues.
-		for (const sheet of Array.from(document.styleSheets)) {
-			if (sheet.href) continue;
-			try {
-				for (const rule of Array.from(sheet.cssRules || [])) {
-					if (rule.type === CSSRule.FONT_FACE_RULE) {
-						cssTexts.push(rule.cssText);
-					}
-				}
-			} catch {
-				// SecurityError — skip.
-			}
-		}
-
-		// 3. Extract every top-level @font-face block from the combined
-		//    CSS text via regex. This handles the standard Google Fonts
-		//    shape (each rule is a flat block at the top level).
-		const allCSS = cssTexts.join('\n');
-		const fontFaceBlocks = allCSS.match(/@font-face\s*\{[^}]*\}/gi) || [];
-
-		// 4. For each block, replace any url(...) reference with a base64
-		//    data URL fetched directly. The original URL may already be
-		//    a data: URL — leave those alone.
-		const embedded = await Promise.all(
-			fontFaceBlocks.map(async (block) => {
-				const urlRegex = /url\(\s*['"]?([^'")\s]+)['"]?\s*\)/g;
-				const matches = Array.from(block.matchAll(urlRegex));
-				let result = block;
-				for (const m of matches) {
-					const url = m[1];
-					if (url.startsWith('data:')) continue;
-					try {
-						const res = await fetch(url);
-						if (!res.ok) continue;
-						const blob = await res.blob();
-						const dataUrl = await new Promise<string>((resolve, reject) => {
-							const reader = new FileReader();
-							reader.onload = () => resolve(reader.result as string);
-							reader.onerror = reject;
-							reader.readAsDataURL(blob);
-						});
-						result = result.replace(m[0], `url(${dataUrl})`);
-					} catch {
-						// skip this URL
-					}
-				}
-				return result;
-			}),
-		);
-
-		this._fontEmbedCSS = embedded.join('\n');
-		if (this._fontEmbedCSS === '') {
-			console.warn(
-				'LiquidGlass: no @font-face rules found on the page; '
-				+ 'captured rasters will use system fallback fonts and may '
-				+ 'misalign with the live DOM under glass elements.',
-			);
-		}
+		this._fontEmbedCSS = await _sharedFontEmbedCSS;
 	}
 
 	/**
