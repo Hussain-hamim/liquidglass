@@ -957,8 +957,15 @@ export class LiquidGlass {
 		const dw = r.width * dpr;
 		const dh = r.height * dpr;
 
+		// Hidden / collapsed media element — nothing to draw, but
+		// drawImage with zero dimensions throws InvalidStateError, so
+		// short-circuit.
+		if (dw <= 0 || dh <= 0) return false;
+
 		if (tag === 'CANVAS') {
-			this.capture.ctx.drawImage(el as HTMLCanvasElement, dx, dy, dw, dh);
+			const liveCanvas = el as HTMLCanvasElement;
+			if (liveCanvas.width <= 0 || liveCanvas.height <= 0) return false;
+			this.capture.ctx.drawImage(liveCanvas, dx, dy, dw, dh);
 			return true;
 		} else if (tag === 'IMG') {
 			const img = el as HTMLImageElement;

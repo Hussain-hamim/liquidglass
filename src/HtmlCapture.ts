@@ -195,17 +195,31 @@ export class HtmlCapture {
 		const w = Math.round(cssW * this.dpr);
 		const h = Math.round(cssH * this.dpr);
 
+		// Hidden / collapsed element — nothing to draw or capture. Drop
+		// any stale cache entry so a future re-show triggers a fresh
+		// capture instead of blitting a zero-sized source canvas.
+		if (w <= 0 || h <= 0) {
+			this.cache.delete(element);
+			return;
+		}
+
 		// Always blit any existing cache first — even if stale — so the
 		// compositing canvas never has a transparent hole at this
 		// element's location while async work runs in the background.
 		let cacheIsFresh = false;
 		const cached = this.cache.get(element);
 		if (cached) {
-			this.ctx.drawImage(cached.canvas, x, y, w, h);
-			cached.x = x;
-			cached.y = y;
-			cacheIsFresh =
-				Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5;
+			// Guard against a previously-cached zero-sized canvas (e.g.
+			// from an element that was display:none at capture time).
+			if (cached.canvas.width > 0 && cached.canvas.height > 0) {
+				this.ctx.drawImage(cached.canvas, x, y, w, h);
+				cached.x = x;
+				cached.y = y;
+				cacheIsFresh =
+					Math.abs(cached.w - w) < 0.5 && Math.abs(cached.h - h) < 0.5;
+			} else {
+				this.cache.delete(element);
+			}
 		}
 
 		if (!force && cacheIsFresh) return;
@@ -217,7 +231,10 @@ export class HtmlCapture {
 		// Canvas elements are drawn directly via the fast path.
 		if (element.tagName === 'CANVAS') {
 			if (!cached) {
-				this.ctx.drawImage(element as HTMLCanvasElement, x, y, w, h);
+				const liveCanvas = element as HTMLCanvasElement;
+				if (liveCanvas.width > 0 && liveCanvas.height > 0) {
+					this.ctx.drawImage(liveCanvas, x, y, w, h);
+				}
 			}
 			return;
 		}
@@ -245,6 +262,7 @@ export class HtmlCapture {
 		cssH: number,
 		hideNodes: HTMLElement[] | null = null,
 	): Promise<HTMLCanvasElement | null> {
+		if (cssW <= 0 || cssH <= 0) return null;
 		const hideSet: Set<HTMLElement> | null = hideNodes && hideNodes.length
 			? new Set(hideNodes)
 			: null;
@@ -326,6 +344,11 @@ export class HtmlCapture {
 		cssW: number,
 		cssH: number,
 	): Promise<void> {
+		// Defensive: skip zero-sized captures. captureElement() already
+		// guards this but the html-to-image path is reachable from
+		// elsewhere, and a 0×0 toCanvas call returns a 0×0 canvas that
+		// will throw on every subsequent drawImage.
+		if (cssW <= 0 || cssH <= 0 || w <= 0 || h <= 0) return;
 		try {
 			const rendered = await toCanvas(element, {
 				width: cssW,
