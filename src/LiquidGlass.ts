@@ -1291,19 +1291,30 @@ export class LiquidGlass {
 			return true;
 		} else if (tag === 'VIDEO') {
 			const vid = el as HTMLVideoElement;
-			if (vid.readyState < 2) return false;
-			this._drawMediaFitted(
-				targetCtx,
-				vid,
-				vid.videoWidth,
-				vid.videoHeight,
-				el,
-				r,
-				dx,
-				dy,
-				dw,
-				dh,
-			);
+			// readyState 0 = HAVE_NOTHING (no data at all — skip).
+			// readyState >= 1 = HAVE_METADATA (dimensions known; during
+			// seeking the readyState may drop to 1, but drawImage still
+			// draws the last decoded frame, which is far better than a
+			// white hole in the glass effect).
+			if (vid.readyState < 1) return false;
+			try {
+				this._drawMediaFitted(
+					targetCtx,
+					vid,
+					vid.videoWidth,
+					vid.videoHeight,
+					el,
+					r,
+					dx,
+					dy,
+					dw,
+					dh,
+				);
+			} catch {
+				// Broken source, revoked blob URL, or decoder error —
+				// skip gracefully rather than crashing the render loop.
+				return false;
+			}
 			return true;
 		}
 		return false;
