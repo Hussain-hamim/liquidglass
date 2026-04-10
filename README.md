@@ -1,8 +1,12 @@
 # LiquidGlass
 
-![LiquidGlass Banner](https://liquid-glass.ybouane.com/banner.jpg)
+[![LiquidGlass Banner](https://liquid-glass.ybouane.com/banner.jpg)](https://liquid-glass.ybouane.com/)
 
-A liquid glass effect library for the web. Apply realistic glass refraction, blur, chromatic aberration, and lighting effects to any HTML element using WebGL shaders.
+A liquid glass effect library for the web. **[Live Demo](https://liquid-glass.ybouane.com/)** Apply realistic glass refraction, blur, chromatic aberration, and lighting effects to any HTML element using WebGL shaders.
+
+## Demo
+
+[https://liquid-glass.ybouane.com/](https://liquid-glass.ybouane.com/)
 
 ## Installation
 
