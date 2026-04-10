@@ -17,7 +17,8 @@
 		"src/"
 	],
 	"scripts": {
-		"build": "tsc",
+		"postinstall": "patch-package",
+		"build": "tsc && esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
 		"dev": "tsc --watch"
 	},
 	"keywords": [
@@ -32,10 +33,10 @@
 	],
 	"author": "",
 	"license": "MIT",
-	"dependencies": {
-		"html-to-image": "^1.11.11"
-	},
 	"devDependencies": {
+		"esbuild": "^0.28.0",
+		"html-to-image": "^1.11.11",
+		"patch-package": "^8.0.1",
 		"typescript": "^5.7.0"
 	}
 }
