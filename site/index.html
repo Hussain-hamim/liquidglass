@@ -3,7 +3,21 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Liquid Glass — WebGL Glass Effects for the Web</title>
+<title>LiquidGlass — WebGL Glass Effects for the Web</title>
+<meta name="description" content="Apply realistic glass refraction, blur, chromatic aberration, and lighting effects to any HTML element using WebGL shaders.">
+
+<!-- Open Graph -->
+<meta property="og:title" content="LiquidGlass">
+<meta property="og:description" content="Realistic WebGL glass effects for any HTML element — refraction, blur, chromatic aberration, specular highlights, and more.">
+<meta property="og:image" content="https://liquid-glass.ybouane.com/banner.jpg">
+<meta property="og:url" content="https://liquid-glass.ybouane.com">
+<meta property="og:type" content="website">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="LiquidGlass">
+<meta name="twitter:description" content="Realistic WebGL glass effects for any HTML element — refraction, blur, chromatic aberration, specular highlights, and more.">
+<meta name="twitter:image" content="https://liquid-glass.ybouane.com/banner.jpg">
 
 <!-- Google Fonts: Inter -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -65,13 +79,14 @@ body {
 		text-align: center;
 		z-index: 2;
 		pointer-events: none;
-		padding: 20px 0 10px;
+		padding: 40px;
+        justify-self: center;
 
 		h1 {
 			color: #FFFFFF;
 			font-size: 56px;
 			font-weight: 800;
-			text-shadow: 0 2px 24px rgba(0,0,0,0.5);
+			text-shadow: 0 2px 24px rgba(0,0,0,0.7);
 			letter-spacing: -1px;
 		}
 
@@ -79,7 +94,8 @@ body {
 			color: #FFFFFF;
 			font-size: 18px;
 			margin-top: 12px;
-			text-shadow: 0 1px 8px rgba(0,0,0,0.4);
+			text-shadow: 0 1px 8px rgba(0,0,0,0.7);
+            font-weight: 600;
 		}
 	}
 
@@ -948,6 +964,14 @@ import { LiquidGlass } from '../dist/index.js';
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // Configure all glass elements
+document.querySelector('.hero-title').dataset.config = JSON.stringify({
+	blurAmount: 0.3,
+	chromAberration: 0.2,
+	cornerRadius: 60,
+	zRadius: 60,
+	refraction: 1.2,
+	brightness: -0.2,
+});
 document.getElementById('glass-btn-1').dataset.config = JSON.stringify({
 	button: true,
 	cornerRadius: 28,
@@ -1020,7 +1044,7 @@ if (document.fonts && document.fonts.ready) {
 const heroInstance = await LiquidGlass.init({
 	root: document.getElementById('hero-root'),
 	glassElements: document.querySelectorAll(
-		'#glass-btn-1, #glass-btn-2, #glass-fp1, #glass-fp2, #glass-fp3, #glass-tab-indicator'
+		'.hero-title, #glass-btn-1, #glass-btn-2, #glass-fp1, #glass-fp2, #glass-fp3, #glass-tab-indicator'
 	),
 });
 
