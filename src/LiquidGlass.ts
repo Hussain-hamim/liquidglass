@@ -359,7 +359,7 @@ export class LiquidGlass {
 			}
 
 			const canvas = document.createElement('canvas');
-			canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
+			canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:-1;';
 			el.insertBefore(canvas, el.firstChild);
 
 			this.glassCanvases.set(el, canvas);
@@ -770,6 +770,7 @@ export class LiquidGlass {
 			`width:${elW + padW}px`,
 			`height:${elH + padH}px`,
 			'pointer-events:none',
+			'z-index:-1'
 		].join(';') + ';';
 		this._glassLastSize.set(el, { w: elW, h: elH });
 	}
