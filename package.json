@@ -1,5 +1,5 @@
 {
-	"name": "liquidglass",
+	"name": "@ybouane/liquidglass",
 	"version": "1.0.0",
 	"description": "A liquid glass effect library for the web — apply realistic glass refraction, blur, and lighting to any HTML element.",
 	"type": "module",

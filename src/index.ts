@@ -5,7 +5,7 @@
  * lighting to any HTML element using WebGL shaders.
  *
  * @example
- *   import { LiquidGlass } from 'liquidglass';
+ *   import { LiquidGlass } from '@ybouane/liquidglass';
  *
  *   const instance = await LiquidGlass.init({
  *       root: document.querySelector('#my-root'),
@@ -15,7 +15,7 @@
  *   // Later:
  *   instance.destroy();
  *
- * @module liquidglass
+ * @module @ybouane/liquidglass
  */
 
 export { LiquidGlass } from './LiquidGlass.js';

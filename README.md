@@ -5,14 +5,14 @@ A liquid glass effect library for the web. Apply realistic glass refraction, blu
 ## Installation
 
 ```bash
-npm install liquidglass
+npm install @ybouane/liquidglass
 ```
 
 Or skip the install and import directly from a CDN:
 
 ```html
 <script type="module">
-  import { LiquidGlass } from 'https://cdn.jsdelivr.net/npm/liquidglass/dist/index.js';
+  import { LiquidGlass } from 'https://cdn.jsdelivr.net/npm/@ybouane/liquidglass/dist/index.js';
 </script>
 ```
 
@@ -34,7 +34,7 @@ Or skip the install and import directly from a CDN:
 </div>
 
 <script type="module">
-  import { LiquidGlass } from 'liquidglass';
+  import { LiquidGlass } from '@ybouane/liquidglass';
 
   const glassEl = document.querySelector('.my-glass');
   glassEl.dataset.config = JSON.stringify({

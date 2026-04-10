@@ -9,7 +9,7 @@
  * behaviour, resize, and the render loop.
  *
  * Usage:
- *   import { LiquidGlass } from 'liquidglass';
+ *   import { LiquidGlass } from '@ybouane/liquidglass';
  *   LiquidGlass.init({ root, glassElements });
  */
 
