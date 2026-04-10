@@ -197,14 +197,12 @@ export class GlassRenderer {
 		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
 
-		// Copy bgFBO → blurA
+		// Copy bgFBO → blurA (u_scale/u_offset are already (1,1)/(0,0))
 		const bw = fboSet.blurA.w;
 		const bh = fboSet.blurA.h;
 		gl.bindFramebuffer(gl.FRAMEBUFFER, fboSet.blurA.fbo);
 		gl.viewport(0, 0, bw, bh);
 		gl.bindTexture(gl.TEXTURE_2D, fboSet.bg.tex);
-		gl.uniform2f(this.blitU.u_scale, 1, 1);
-		gl.uniform2f(this.blitU.u_offset, 0, 0);
 		this._drawQuad(this.blitP, this.quadBuf);
 
 		// Multi-pass Gaussian blur (skip entirely when not needed)

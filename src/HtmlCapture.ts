@@ -336,13 +336,6 @@ async function buildFontBlocks(): Promise<EmbeddedFontBlock[]> {
 		}),
 	);
 
-	if (embedded.length === 0) {
-		console.warn(
-			'LiquidGlass: no @font-face rules found on the page; '
-			+ 'captured rasters will use system fallback fonts and may '
-			+ 'misalign with the live DOM under glass elements.',
-		);
-	}
 	return embedded;
 }
 
@@ -582,19 +575,9 @@ export class HtmlCapture {
 				width: cssW,
 				height: cssH,
 				pixelRatio: this.dpr,
-				// No filter — html-to-image natively handles <canvas>
-				// (via toDataURL → <img>) and <video> (via drawImage
-				// into a temp canvas → toDataURL → <img>). Filtering
-				// them out was leaving transparent holes in the snapshot
-				// that broke z-layering when HTML content sat on top of
-				// a canvas or video.
-				//
-				// Reuse the prefetched font embed CSS so the captured
-				// raster renders with the page's actual webfont (e.g.
-				// Inter), keeping wraps and glyph positions aligned
-				// with the live DOM. Passing a string (even an empty
-				// one) makes html-to-image skip its noisy CSSOM-walking
-				// branch on every per-element capture.
+				// Per-element font embed CSS so the captured raster
+				// uses the page's actual webfont at the correct weight
+				// and unicode subset for this element's text content.
 				fontEmbedCSS: this.fontEmbedCSSForElement(element),
 			});
 

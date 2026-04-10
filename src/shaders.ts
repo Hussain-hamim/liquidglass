@@ -84,7 +84,7 @@ void main() {
 //   • Rounded-rect SDF with pill-bevel height field
 //   • Dual-surface (biconvex) refraction
 //   • Chromatic aberration (dispersion)
-//   • Sample of the pre-blurred background (always fully frosted)
+//   • Edge-weighted sampling of the pre-blurred background
 //   • Fresnel, specular (multi-light Blinn-Phong), edge highlight
 //   • Cool glass tint, saturation, brightness
 //   • Drop shadow with offset
@@ -225,9 +225,11 @@ void main() {
 		texture2D(u_blurTex, base).g,
 		texture2D(u_blurTex, base - caD).b
 	);
-	// ── Frosting mix ──
-	float frostVar = (1.0 - edge * 0.15);
-	vec3 col = mix(sharp, blur, frostVar);
+	// ── Edge-weighted blur mix ──
+	// Centre of the panel uses the blurred sample; the rim blends
+	// toward the sharp sample so refraction edges stay crisp.
+	float edgeMix = (1.0 - edge * 0.15);
+	vec3 col = mix(sharp, blur, edgeMix);
 
 	// ── Brightness ──
 	col *= 1.0 + u_brightness;

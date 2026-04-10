@@ -6,11 +6,7 @@
 
 /** Per-element glass configuration. */
 export interface GlassConfig {
-	/**
-	 * Amount of background blur behind the glass (0 = clear, 1 = maximum).
-	 * The blurred sample is what the glass surface displays — there is no
-	 * separate frost control.
-	 */
+	/** Background blur strength (0 = sharp, 1 = maximum blur). */
 	blurAmount: number;
 	/** Refraction strength — how much the glass bends the image behind it */
 	refraction: number;

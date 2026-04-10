@@ -437,8 +437,8 @@ export class LiquidGlass {
 			if (child === element) { seenElement = true; continue; }
 			if (!seenElement) continue;
 			if (!this.glassSet.has(child)) continue;
-			const sampleRect = this._getSampleRect(
-				child.getBoundingClientRect(), rootRect, dpr,
+			const sampleRect = this._getPixelRect(
+				child.getBoundingClientRect(), rootRect, dpr, SHADOW_PAD,
 			);
 			if (LiquidGlass._rectsIntersect(elementBox, sampleRect)) {
 				this._glassDirty.add(child);
@@ -462,8 +462,8 @@ export class LiquidGlass {
 			this.glassSet.has(element) ? SHADOW_PAD : 0,
 		);
 		for (const glass of this.glassSet) {
-			const sampleRect = this._getSampleRect(
-				glass.getBoundingClientRect(), rootRect, dpr,
+			const sampleRect = this._getPixelRect(
+				glass.getBoundingClientRect(), rootRect, dpr, SHADOW_PAD,
 			);
 			if (LiquidGlass._rectsIntersect(elementBox, sampleRect)) {
 				this._glassDirty.add(glass);
@@ -1050,7 +1050,7 @@ export class LiquidGlass {
 		const centerY = (elRect.top - rootRect.top) + elRect.height / 2;
 		const glassCanvas = this.glassCanvases.get(child);
 		const isBeingDragged = isDragging && this._drag.element === child;
-		const sampleRect = this._getSampleRect(elRect, rootRect, dpr);
+		const sampleRect = this._getPixelRect(elRect, rootRect, dpr, SHADOW_PAD);
 
 		const cached = this._glassCache.get(child);
 		const posChanged = !cached
@@ -1380,14 +1380,6 @@ export class LiquidGlass {
 			contentRect.w,
 			contentRect.h,
 		);
-	}
-
-	private _getSampleRect(
-		elRect: DOMRect,
-		rootRect: DOMRect,
-		dpr: number,
-	): SampleRect {
-		return this._getPixelRect(elRect, rootRect, dpr, SHADOW_PAD);
 	}
 
 	private _getPixelRect(
