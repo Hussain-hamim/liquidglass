@@ -757,8 +757,8 @@ export class LiquidGlass {
 		const dpr = window.devicePixelRatio || 1;
 		// Use offsetWidth/Height — the CSS box size before transforms.
 		// This prevents button hover scale from inflating the canvas.
-		const elW = el.offsetWidth;
-		const elH = el.offsetHeight;
+		const elW = Math.round(el.offsetWidth);
+		const elH = Math.round(el.offsetHeight);
 		const padW = SHADOW_PAD * 2;
 		const padH = SHADOW_PAD * 2;
 		canvas.width = Math.round((elW + padW) * dpr);
@@ -1078,13 +1078,23 @@ export class LiquidGlass {
 			: (!cached || posChanged || isExplicitlyDirty || priorGlassChanged || hasDynamicContributors);
 
 		if (needsShaderRender && glassCanvas) {
+			// Use glassCanvas dimensions as the authoritative size for
+			// the renderer pass. sampleRect.w/h (from getBoundingClientRect)
+			// can differ from glassCanvas.width/height (from offsetWidth)
+			// by ±1 device pixel due to sub-pixel rounding differences.
+			// If the renderer clears fewer pixels than drawImage copies,
+			// the rightmost/bottom columns contain stale pixels → a thin
+			// visible line. Using the same source of truth for both avoids
+			// the mismatch.
+			const renderW = glassCanvas.width;
+			const renderH = glassCanvas.height;
 			this._composeSceneForGlass(child, sampleRect, rootRect, dpr);
 			this.renderer.uploadAndBlur(
 				this._sceneCanvas,
 				0,
 				0,
-				sampleRect.w,
-				sampleRect.h,
+				renderW,
+				renderH,
 				config.blurAmount,
 			);
 			this.renderer.clear();
