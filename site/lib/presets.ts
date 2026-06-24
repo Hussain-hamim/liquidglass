@@ -1,3 +1,5 @@
+import { GITHUB_REPO_URL } from "./site-url";
+
 export type GlassCategory =
   | "panels"
   | "buttons"
@@ -50,7 +52,7 @@ export function getLibraryForPreset(preset: GlassPreset): GlassLibraryInfo {
     id: "ybouane",
     name: "LiquidGlass (ybouane)",
     pkg: "@ybouane/liquidglass",
-    url: "https://github.com/ybouane/liquidglass",
+    url: GITHUB_REPO_URL,
     badge: "@ybouane",
   };
 }

@@ -1,5 +1,6 @@
 import type { GlassPreset } from "./presets";
 import { getLibraryForPreset } from "./presets";
+import { GITHUB_REPO_URL } from "./site-url";
 
 function toComponentName(name: string): string {
   return name
@@ -60,7 +61,7 @@ function ybouaneHeader(presetName: string, description: string): string {
  * 6. Call LiquidGlass.init({ root, glassElements }) once on mount.
  *    - Destroy the instance in useEffect cleanup: instance?.destroy()
  *
- * Docs: https://github.com/ybouane/liquidglass
+ * Docs: ${GITHUB_REPO_URL}
  * This preset does NOT use @samasante/liquid-glass.
  */`;
 }

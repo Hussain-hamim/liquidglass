@@ -6,3 +6,6 @@ export function getSiteUrl(): string {
   }
   return "http://localhost:3000";
 }
+
+/** GitHub repo for this project (showcase site + library). */
+export const GITHUB_REPO_URL = "https://github.com/Hussain-hamim/liquidglass";

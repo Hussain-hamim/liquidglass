@@ -6,6 +6,7 @@ import { presets, CATEGORIES } from "@/lib/presets";
 import { SearchBar, Toast } from "@/components/ui";
 import { SiteHeader } from "@/components/SiteHeader";
 import { GlassCategoryTabs } from "@/components/GlassCategoryTabs";
+import { GITHUB_REPO_URL } from "@/lib/site-url";
 
 const PresetCard = dynamic(
   () => import("@/components/PresetCard").then((m) => m.PresetCard),
@@ -115,7 +116,7 @@ export function HomePage() {
               </svg>
             </a>
             <a
-              href="https://github.com/ybouane/liquidglass"
+              href={GITHUB_REPO_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-medium text-zinc-300 border border-white/[0.1] hover:border-white/[0.2] hover:text-white bg-white/[0.03] transition-colors"

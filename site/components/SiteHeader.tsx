@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { GITHUB_REPO_URL } from "@/lib/site-url";
 
 export function SiteHeader() {
   return (
@@ -8,7 +9,7 @@ export function SiteHeader() {
           LiquidGlass
         </Link>
         <a
-          href="https://github.com/ybouane/liquidglass"
+          href={GITHUB_REPO_URL}
           target="_blank"
           rel="noopener noreferrer"
           className="text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors"

@@ -17,8 +17,7 @@
 		"src/"
 	],
 	"scripts": {
-		"postinstall": "patch-package",
-		"build": "tsc && esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
+		"build": "patch-package && tsc && esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
 		"dev": "tsc --watch"
 	},
 	"keywords": [
