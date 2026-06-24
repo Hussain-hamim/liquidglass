@@ -14,7 +14,10 @@ function samasanteHeader(title: string, extraSteps: string[]): string {
     "1. Install the library:",
     "   npm install @samasante/liquid-glass",
     "",
-    "2. Copy the required example component from:",
+    "2. Add to next.config.js (Next.js App Router):",
+    "   transpilePackages: [\"@samasante/liquid-glass\"],",
+    "",
+    "3. Copy the required example component from:",
     "   https://github.com/samasante/liquid-glass/tree/main/examples",
     "",
     ...extraSteps,
@@ -39,19 +42,22 @@ function ybouaneHeader(presetName: string, description: string): string {
  * 1. Install the library:
  *    npm install @ybouane/liquidglass
  *
- * 2. Use this component in a client-only React tree ("use client" in Next.js).
+ * 2. Add to next.config.js (Next.js App Router):
+ *    transpilePackages: ["@ybouane/liquidglass"],
  *
- * 3. Structure requirements (LiquidGlass.init):
+ * 3. Use this component in a client-only React tree ("use client" in Next.js).
+ *
+ * 4. Structure requirements (LiquidGlass.init):
  *    - \`root\` is the container that holds background + glass elements.
  *    - Each glass element MUST be a direct child of \`root\` (not nested in wrappers).
  *    - Put visible content (image, gradient, video) behind the glass inside \`root\`
  *      so the WebGL shader has pixels to refract/blur.
  *
- * 4. Configure the effect via \`data-config\` JSON on the glass element.
+ * 5. Configure the effect via \`data-config\` JSON on the glass element.
  *    - Set before calling LiquidGlass.init().
  *    - Common keys: cornerRadius, blurAmount, refraction, button, floating, brightness.
  *
- * 5. Call LiquidGlass.init({ root, glassElements }) once on mount.
+ * 6. Call LiquidGlass.init({ root, glassElements }) once on mount.
  *    - Destroy the instance in useEffect cleanup: instance?.destroy()
  *
  * Docs: https://github.com/ybouane/liquidglass
@@ -62,8 +68,8 @@ function ybouaneHeader(presetName: string, description: string): string {
 function refSwitchCode(name: string): string {
   const componentName = toComponentName(name);
   return `${samasanteHeader(`${name} — Glass Switch`, [
-    "3. Copy GlassSwitch.tsx into your project (e.g. ./components/GlassSwitch.tsx).",
-    "4. Import GlassSwitch below and render inside a client component.",
+    "4. Copy GlassSwitch.tsx into your project (e.g. ./components/GlassSwitch.tsx).",
+    "5. Import GlassSwitch below and render inside a client component.",
   ])}
 
 "use client";
@@ -94,8 +100,8 @@ export function ${componentName}() {
 function refSliderCode(name: string): string {
   const componentName = toComponentName(name);
   return `${samasanteHeader(`${name} — Glass Slider`, [
-    "3. Copy GlassSlider.tsx into your project (e.g. ./components/GlassSlider.tsx).",
-    "4. Import GlassSlider below and wire value/onValueChange to your state.",
+    "4. Copy GlassSlider.tsx into your project (e.g. ./components/GlassSlider.tsx).",
+    "5. Import GlassSlider below and wire value/onValueChange to your state.",
   ])}
 
 "use client";
@@ -130,9 +136,9 @@ export function ${componentName}() {
 function refVideoCode(name: string): string {
   const componentName = toComponentName(name);
   return `${samasanteHeader(`${name} — Glass Video Controls`, [
-    "3. Copy GlassVideoControls.tsx into your project.",
-    "4. Provide a video file at src (or replace with your CDN URL).",
-    "5. Wrap in a positioned container with aspect-ratio for layout.",
+    "4. Copy GlassVideoControls.tsx into your project.",
+    "5. Provide a video file at src (or replace with your CDN URL).",
+    "6. Wrap in a positioned container with aspect-ratio for layout.",
   ])}
 
 "use client";
@@ -151,10 +157,10 @@ export function ${componentName}() {
 function refMenuCode(name: string, bg: string): string {
   const componentName = toComponentName(name);
   return `${samasanteHeader(`${name} — Glass Dropdown Menu`, [
-    "3. Copy GlassDropdownMenu.tsx into your project.",
+    "4. Copy GlassDropdownMenu.tsx into your project.",
     "   (Uses @samasante/liquid-glass <Glass> with backdrop-filter lens.)",
-    "4. Place a wallpaper/background image behind the menu root for refraction.",
-    "5. Position the menu with x/y relative to the root container.",
+    "5. Place a wallpaper/background image behind the menu root for refraction.",
+    "6. Position the menu with x/y relative to the root container.",
   ])}
 
 "use client";
