@@ -31,6 +31,8 @@ const NAV = [
 ] as const;
 
 const NAV_LABELS = NAV.map((n) => n.label);
+/** Stable reference — avoid NAV.slice() in render (causes infinite setState loops). */
+const NAV_COMPACT = [NAV[0]];
 const CYCLE_MS = 2000;
 const USER_IDLE_MS = 2000;
 
@@ -66,6 +68,7 @@ export function GlassNavDemo({
   glassEngine = "ybouane",
   glassConfig: glassConfigProp,
   autoCycle = !compact,
+  autoCloseBetweenCycles = false,
   menuAlwaysOpen = false,
 }: {
   background?: string;
@@ -74,6 +77,7 @@ export function GlassNavDemo({
   glassEngine?: "samasante" | "ybouane";
   glassConfig?: Record<string, unknown>;
   autoCycle?: boolean;
+  autoCloseBetweenCycles?: boolean;
   menuAlwaysOpen?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -83,31 +87,37 @@ export function GlassNavDemo({
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userActive = useRef(false);
 
-  const [openLabel, setOpenLabel] = useState<string | null>("Product");
+  const [openLabel, setOpenLabel] = useState<string | null>(
+    autoCloseBetweenCycles ? null : "Product",
+  );
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const navGlassRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const navGlassInstance = useRef<{ destroy: () => void } | null>(null);
   const [btnPositions, setBtnPositions] = useState<Record<string, { x: number; y: number; w: number; h: number }>>({});
 
   const wallpaper = toWallpaper(background);
-  const navItems = compact ? NAV.slice(0, 1) : NAV;
+  const navItems = compact && !autoCycle ? NAV_COMPACT : NAV;
   const openItems = NAV.find((n) => n.label === openLabel)?.items ?? [];
   const openGlassConfig =
     glassConfigProp ??
     (openLabel ? MENU_GLASS_PRESETS[openLabel] : undefined) ??
     MENU_GLASS_PRESETS.Product;
 
-  const updateMenuPos = (label: string) => {
+  const updateMenuPos = useCallback((label: string) => {
     const root = rootRef.current;
     const trigger = triggerRefs.current[label];
     if (!root || !trigger) return;
     const cr = root.getBoundingClientRect();
     const tr = trigger.getBoundingClientRect();
-    setMenuPos({
-      x: tr.left - cr.left,
-      y: tr.bottom - cr.top + (compact ? 8 : 12),
+    setMenuPos((prev) => {
+      const next = {
+        x: tr.left - cr.left,
+        y: tr.bottom - cr.top + (compact ? 8 : 12),
+      };
+      if (prev.x === next.x && prev.y === next.y) return prev;
+      return next;
     });
-  };
+  }, [compact]);
 
   const updateBtnPositions = useCallback(() => {
     const root = rootRef.current;
@@ -126,20 +136,41 @@ export function GlassNavDemo({
         h: br.height + pad,
       };
     }
-    setBtnPositions(positions);
-  }, [compact]);
+    setBtnPositions((prev) => {
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(positions);
+      if (
+        prevKeys.length === nextKeys.length &&
+        nextKeys.every((key) => {
+          const p = prev[key];
+          const n = positions[key];
+          return (
+            p &&
+            n &&
+            p.x === n.x &&
+            p.y === n.y &&
+            p.w === n.w &&
+            p.h === n.h
+          );
+        })
+      ) {
+        return prev;
+      }
+      return positions;
+    });
+  }, [compact, autoCycle]);
 
   useLayoutEffect(() => {
+    updateBtnPositions();
     if (!openLabel) return;
     updateMenuPos(openLabel);
-    updateBtnPositions();
     const onResize = () => {
-      updateMenuPos(openLabel);
       updateBtnPositions();
+      if (openLabel) updateMenuPos(openLabel);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [openLabel, compact, updateBtnPositions]);
+  }, [openLabel, updateBtnPositions, updateMenuPos]);
 
   // Init glass on nav buttons once portal refs are in the DOM
   const btnPosKeys = Object.keys(btnPositions).sort().join(",");
@@ -207,6 +238,13 @@ export function GlassNavDemo({
 
   const advanceMenu = () => {
     setOpenLabel((prev) => {
+      if (autoCloseBetweenCycles) {
+        if (prev === null) return NAV_LABELS[0];
+        const idx = NAV_LABELS.indexOf(prev as (typeof NAV_LABELS)[number]);
+        if (idx === NAV_LABELS.length - 1) return null;
+        return NAV_LABELS[idx + 1];
+      }
+
       const idx = prev ? NAV_LABELS.indexOf(prev as (typeof NAV_LABELS)[number]) : -1;
       return NAV_LABELS[(idx + 1) % NAV_LABELS.length];
     });
@@ -274,7 +312,7 @@ export function GlassNavDemo({
       <div
         className={`absolute inset-x-0 top-0 z-10 ${compact ? "px-3 pt-3" : "px-6 pt-5"}`}
       >
-        <nav className={`flex items-center ${compact ? "gap-4" : "gap-8"}`}>
+        <nav className={`flex items-center ${compact ? "gap-3" : "gap-8"}`}>
           {navItems.map(({ label }) => {
             const open = openLabel === label;
             return (

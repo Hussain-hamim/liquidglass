@@ -32,6 +32,11 @@ import {
 // Motion signature — distinct overshoot + ease-out timings (same as the switch).
 const EXPAND_ANIM = { ease: cubicBezier(0.34, 1.36, 0.42, 1), duration: 0.27 };
 const COLLAPSE_ANIM = { ease: cubicBezier(0.36, 0, 0.18, 1), duration: 0.46 };
+const RESTING_GLASS_SCALE = 1.5;
+const RESTING_GLASS_TINT = 0;
+const RESTING_GLASS_SHADOW = 1;
+const RESTING_GLASS_TRACK_X = 0.95;
+const RESTING_GLASS_TRACK_Y = 0.975;
 
 export const SLIDER_BASE: Partial<GlassOptics> = {
   mapSize: 256,
@@ -142,6 +147,8 @@ export interface GlassSliderProps {
   activeColor?: string;
   /** Background colour the lens refracts against. */
   surface?: string;
+  /** Keep a subtle lens visible at rest; used by preview cards. */
+  restingGlass?: boolean;
 }
 
 export const GlassSlider: React.FC<GlassSliderProps> = ({
@@ -170,6 +177,7 @@ export const GlassSlider: React.FC<GlassSliderProps> = ({
   trackColor,
   activeColor,
   surface,
+  restingGlass = false,
 }) => {
   const isDark = scheme === "dark";
   const isSafari = useIsSafari();
@@ -216,6 +224,7 @@ export const GlassSlider: React.FC<GlassSliderProps> = ({
   const rubberLimitRef = useRef(rubberLimit);
   const rubberRangeRef = useRef(rubberRange);
   const tintBlurRef = useRef(tintBlur ?? 0);
+  const initialRestingGlassRef = useRef(restingGlass);
   useLayoutEffect(() => {
     travelRef.current = travel;
     thumbWRef.current = thumbW;
@@ -255,14 +264,21 @@ export const GlassSlider: React.FC<GlassSliderProps> = ({
         (padRef.current + thumbWRef.current / 2 + thumbX.get()) /
         fullWRef.current,
     );
-    const halfW = glassValue(restHalfWRef.current);
-    const halfH = glassValue(restHalfHRef.current);
-    const radius = glassValue(restRadiusRef.current);
-    const tintOpacity = glassValue(1);
-    const trackScaleX = glassValue(0.85);
-    const trackScaleY = glassValue(0.525);
-    const blur = glassValue(tintBlurRef.current);
-    const shadowOpacity = glassValue(0);
+    const showRestingGlass = initialRestingGlassRef.current;
+    const halfW = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restHalfWRef.current : restHalfWRef.current,
+    );
+    const halfH = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restHalfHRef.current : restHalfHRef.current,
+    );
+    const radius = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restRadiusRef.current : restRadiusRef.current,
+    );
+    const tintOpacity = glassValue(showRestingGlass ? RESTING_GLASS_TINT : 1);
+    const trackScaleX = glassValue(showRestingGlass ? RESTING_GLASS_TRACK_X : 0.85);
+    const trackScaleY = glassValue(showRestingGlass ? RESTING_GLASS_TRACK_Y : 0.525);
+    const blur = glassValue(showRestingGlass ? tintBlurRef.current * RESTING_GLASS_TINT : tintBlurRef.current);
+    const shadowOpacity = glassValue(showRestingGlass ? RESTING_GLASS_SHADOW : 0);
     const restShadowOpacity = deriveGlass(
       [shadowOpacity],
       () => 1 - shadowOpacity.get(),
@@ -299,11 +315,17 @@ export const GlassSlider: React.FC<GlassSliderProps> = ({
 
   useEffect(() => {
     if (!draggingRef.current) {
-      mv.halfW.set(restHalfW);
-      mv.halfH.set(restHalfH);
-      mv.radius.set(restRadius);
+      const scale = restingGlass ? RESTING_GLASS_SCALE : 1;
+      mv.halfW.set(scale * restHalfW);
+      mv.halfH.set(scale * restHalfH);
+      mv.radius.set(scale * restRadius);
+      mv.tintOpacity.set(restingGlass ? RESTING_GLASS_TINT : 1);
+      mv.blur.set(restingGlass ? tintBlurRef.current * RESTING_GLASS_TINT : tintBlurRef.current);
+      mv.trackScaleX.set(restingGlass ? RESTING_GLASS_TRACK_X : 0.85);
+      mv.trackScaleY.set(restingGlass ? RESTING_GLASS_TRACK_Y : 0.525);
+      mv.shadowOpacity.set(restingGlass ? RESTING_GLASS_SHADOW : 0);
     }
-  }, [restHalfW, restHalfH, restRadius, mv]);
+  }, [restHalfW, restHalfH, restRadius, restingGlass, mv]);
 
   const holdRef = useRef(0);
   const kickWobbleRef = useRef<() => void>(() => {});
@@ -320,14 +342,19 @@ export const GlassSlider: React.FC<GlassSliderProps> = ({
     animateGlassValue(mv.shadowOpacity, 1, anim);
   };
   const collapse = (anim: typeof COLLAPSE_ANIM) => {
-    animateGlassValue(mv.halfW, restHalfWRef.current, anim);
-    animateGlassValue(mv.halfH, restHalfHRef.current, anim);
-    animateGlassValue(mv.radius, restRadiusRef.current, anim);
-    animateGlassValue(mv.tintOpacity, 1, anim);
-    animateGlassValue(mv.blur, tintBlurRef.current, anim);
-    animateGlassValue(mv.trackScaleX, 0.85, anim);
-    animateGlassValue(mv.trackScaleY, 0.525, anim);
-    animateGlassValue(mv.shadowOpacity, 0, anim);
+    const scale = restingGlass ? RESTING_GLASS_SCALE : 1;
+    animateGlassValue(mv.halfW, scale * restHalfWRef.current, anim);
+    animateGlassValue(mv.halfH, scale * restHalfHRef.current, anim);
+    animateGlassValue(mv.radius, scale * restRadiusRef.current, anim);
+    animateGlassValue(mv.tintOpacity, restingGlass ? RESTING_GLASS_TINT : 1, anim);
+    animateGlassValue(
+      mv.blur,
+      restingGlass ? tintBlurRef.current * RESTING_GLASS_TINT : tintBlurRef.current,
+      anim,
+    );
+    animateGlassValue(mv.trackScaleX, restingGlass ? RESTING_GLASS_TRACK_X : 0.85, anim);
+    animateGlassValue(mv.trackScaleY, restingGlass ? RESTING_GLASS_TRACK_Y : 0.525, anim);
+    animateGlassValue(mv.shadowOpacity, restingGlass ? RESTING_GLASS_SHADOW : 0, anim);
   };
 
   // Init to `false` (not `forceExpanded`) so a mount with forceExpanded=true is

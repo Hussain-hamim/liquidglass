@@ -1,5 +1,7 @@
 "use client";
 
+import { SiteLogo } from "@/components/SiteLogo";
+
 export default function Error({
   error,
   reset,
@@ -9,6 +11,7 @@ export default function Error({
 }) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center text-zinc-50">
+      <SiteLogo variant="full" className="max-w-[220px] mb-8 opacity-90" />
       <h1 className="text-2xl font-bold mb-2">Something went wrong</h1>
       <p className="text-zinc-500 text-sm mb-6 max-w-md">
         {error.message || "An unexpected error occurred while loading this page."}

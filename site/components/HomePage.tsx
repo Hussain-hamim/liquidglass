@@ -67,7 +67,7 @@ export function HomePage() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
             <span className="text-xs font-medium text-zinc-400 tracking-wide">
-              {presets.length} ready-to-use patterns
+              {presets.length} glass effects ready to copy
             </span>
           </div>
 
@@ -128,27 +128,6 @@ export function HomePage() {
             </a>
           </div>
 
-          {/* Install command */}
-          <div className="flex items-center justify-center">
-            <div className="flex items-center gap-3 px-5 py-2.5 rounded-xl bg-zinc-900/60 border border-white/[0.06]">
-              <span className="text-emerald-400 text-xs font-mono">$</span>
-              <code className="text-[13px] text-zinc-300 font-mono">
-                npm i @ybouane/liquidglass
-              </code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText("npm i @ybouane/liquidglass");
-                  showToast("Copied install command!");
-                }}
-                className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.06] transition-colors"
-                title="Copy"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Section divider */}
@@ -173,7 +152,7 @@ export function HomePage() {
         </div>
 
         <p className="text-sm text-zinc-500 mb-6">
-          {filtered.length} pattern{filtered.length !== 1 ? "s" : ""}
+          {filtered.length} glass effect{filtered.length !== 1 ? "s" : ""}
           {category !== "all" ? ` in ${CATEGORIES.find((c) => c.id === category)?.label}` : ""}
         </p>
 

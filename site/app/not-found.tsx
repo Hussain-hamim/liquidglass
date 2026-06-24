@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { SiteLogo } from "@/components/SiteLogo";
 
 export default function NotFound() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center text-zinc-50">
+      <SiteLogo variant="full" className="max-w-[220px] mb-8 opacity-90" />
       <h1 className="text-2xl font-bold mb-2">Page not found</h1>
       <p className="text-zinc-500 text-sm mb-6">
         The page you are looking for does not exist.

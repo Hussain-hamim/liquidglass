@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { BRAND } from "@/lib/brand";
 import { getSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
@@ -14,7 +15,14 @@ export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title,
   description,
-  icons: { icon: "/favicon.png" },
+  icons: {
+    icon: [
+      { url: BRAND.favicon, sizes: "32x32", type: "image/png" },
+      { url: "/favicon-16.png", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-48.png", sizes: "48x48", type: "image/png" },
+    ],
+    apple: BRAND.appleTouchIcon,
+  },
   openGraph: {
     title,
     description,

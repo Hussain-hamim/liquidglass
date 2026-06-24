@@ -37,6 +37,11 @@ const SETTLE = cubicBezier(0.36, 0, 0.18, 1);
 const THUMB_ANIM = { ease: EASE, duration: 0.52 };
 const EXPAND_ANIM = { ease: EASE, duration: 0.26 };
 const COLLAPSE_ANIM = { ease: SETTLE, duration: 0.46 };
+const RESTING_GLASS_SCALE = 1.5;
+const RESTING_GLASS_TINT = 0;
+const RESTING_GLASS_SHADOW = 1;
+const RESTING_GLASS_TRACK_X = 0.95;
+const RESTING_GLASS_TRACK_Y = 0.975;
 
 export const SWITCH_BASE: Partial<GlassOptics> = {
   mapSize: 256,
@@ -119,6 +124,8 @@ export interface GlassSwitchProps {
   activeColor?: string;
   /** Background colour the lens refracts against. */
   surface?: string;
+  /** Keep a subtle lens visible at rest; used by preview cards. */
+  restingGlass?: boolean;
 }
 
 export const GlassSwitch: React.FC<GlassSwitchProps> = ({
@@ -141,6 +148,7 @@ export const GlassSwitch: React.FC<GlassSwitchProps> = ({
   trackColor,
   activeColor,
   surface,
+  restingGlass = false,
 }) => {
   const isDark = scheme === "dark";
 
@@ -169,6 +177,7 @@ export const GlassSwitch: React.FC<GlassSwitchProps> = ({
   const restHalfHRef = useRef(restHalfH);
   const restRadiusRef = useRef(restRadius);
   const tintBlurRef = useRef(tintBlur ?? 0);
+  const initialRestingGlassRef = useRef(restingGlass);
   useLayoutEffect(() => {
     travelRef.current = travel;
     thumbWRef.current = thumbW;
@@ -189,14 +198,21 @@ export const GlassSwitch: React.FC<GlassSwitchProps> = ({
         (padRef.current + 3 + thumbWRef.current / 2 + thumbX.get()) /
         fullWRef.current,
     );
-    const halfW = glassValue(restHalfWRef.current);
-    const halfH = glassValue(restHalfHRef.current);
-    const radius = glassValue(restRadiusRef.current);
-    const tintOpacity = glassValue(1);
-    const trackScaleX = glassValue(0.85);
-    const trackScaleY = glassValue(0.525);
-    const blur = glassValue(tintBlurRef.current);
-    const shadowOpacity = glassValue(0);
+    const showRestingGlass = initialRestingGlassRef.current;
+    const halfW = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restHalfWRef.current : restHalfWRef.current,
+    );
+    const halfH = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restHalfHRef.current : restHalfHRef.current,
+    );
+    const radius = glassValue(
+      showRestingGlass ? RESTING_GLASS_SCALE * restRadiusRef.current : restRadiusRef.current,
+    );
+    const tintOpacity = glassValue(showRestingGlass ? RESTING_GLASS_TINT : 1);
+    const trackScaleX = glassValue(showRestingGlass ? RESTING_GLASS_TRACK_X : 0.85);
+    const trackScaleY = glassValue(showRestingGlass ? RESTING_GLASS_TRACK_Y : 0.525);
+    const blur = glassValue(showRestingGlass ? tintBlurRef.current * RESTING_GLASS_TINT : tintBlurRef.current);
+    const shadowOpacity = glassValue(showRestingGlass ? RESTING_GLASS_SHADOW : 0);
     // Resting puck shadow is the inverse of the expanded-lens shadow: visible at
     // rest, fades out as the thumb blooms into the lens.
     const restShadowOpacity = deriveGlass(
@@ -253,14 +269,19 @@ export const GlassSwitch: React.FC<GlassSwitchProps> = ({
     animateGlassValue(mv.shadowOpacity, 1, anim);
   };
   const collapse = (anim: typeof COLLAPSE_ANIM) => {
-    animateGlassValue(mv.halfW, restHalfWRef.current, anim);
-    animateGlassValue(mv.halfH, restHalfHRef.current, anim);
-    animateGlassValue(mv.radius, restRadiusRef.current, anim);
-    animateGlassValue(mv.tintOpacity, 1, anim);
-    animateGlassValue(mv.blur, tintBlurRef.current, anim);
-    animateGlassValue(mv.trackScaleX, 0.85, anim);
-    animateGlassValue(mv.trackScaleY, 0.525, anim);
-    animateGlassValue(mv.shadowOpacity, 0, anim);
+    const scale = restingGlass ? RESTING_GLASS_SCALE : 1;
+    animateGlassValue(mv.halfW, scale * restHalfWRef.current, anim);
+    animateGlassValue(mv.halfH, scale * restHalfHRef.current, anim);
+    animateGlassValue(mv.radius, scale * restRadiusRef.current, anim);
+    animateGlassValue(mv.tintOpacity, restingGlass ? RESTING_GLASS_TINT : 1, anim);
+    animateGlassValue(
+      mv.blur,
+      restingGlass ? tintBlurRef.current * RESTING_GLASS_TINT : tintBlurRef.current,
+      anim,
+    );
+    animateGlassValue(mv.trackScaleX, restingGlass ? RESTING_GLASS_TRACK_X : 0.85, anim);
+    animateGlassValue(mv.trackScaleY, restingGlass ? RESTING_GLASS_TRACK_Y : 0.525, anim);
+    animateGlassValue(mv.shadowOpacity, restingGlass ? RESTING_GLASS_SHADOW : 0, anim);
   };
 
   // Init to `false` (not `forceExpanded`) so a mount with forceExpanded=true is

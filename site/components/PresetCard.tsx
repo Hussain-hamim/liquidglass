@@ -2,28 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { GlassPreset } from "@/lib/presets";
-import { getLibraryForPreset } from "@/lib/presets";
 import { generateComponentCode, getInstallCommand } from "@/lib/generateCode";
 import { useInView } from "@/lib/useInView";
 import { GlassPreview } from "./GlassPreview";
-
-function LibraryBadge({ preset }: { preset: GlassPreset }) {
-  const lib = getLibraryForPreset(preset);
-  const isYbouane = lib.id === "ybouane";
-
-  return (
-    <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${
-        isYbouane
-          ? "bg-sky-500/15 text-sky-300 border border-sky-500/20"
-          : "bg-violet-500/15 text-violet-300 border border-violet-500/20"
-      }`}
-      title={`Requires ${lib.pkg}`}
-    >
-      {lib.badge}
-    </span>
-  );
-}
+import { StaticGlassPreview } from "./StaticGlassPreview";
 
 export function PresetCard({
   preset,
@@ -36,7 +18,6 @@ export function PresetCard({
   const [showPreview, setShowPreview] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const library = getLibraryForPreset(preset);
   const installCmd = getInstallCommand(preset);
 
   const handleCopy = async () => {
@@ -79,11 +60,23 @@ export function PresetCard({
         }}
       >
         {inView || showPreview ? (
-          <GlassPreview preset={preset} />
+          preset.interactive ? (
+            <GlassPreview preset={preset} />
+          ) : (
+            <StaticGlassPreview
+              preset={preset}
+              actionBar={{
+                onPreview: () => setShowPreview(true),
+                onCopy: handleCopy,
+                mobileOpen,
+              }}
+            />
+          )
         ) : (
           <div className="absolute inset-0 bg-zinc-900/50 animate-pulse" />
         )}
 
+        {preset.interactive && (
         <div
           className={`absolute inset-x-0 bottom-0 z-10 transition-transform duration-200 ease-out ${
             mobileOpen
@@ -93,19 +86,10 @@ export function PresetCard({
         >
           <div className="bg-black/60 backdrop-blur-md border-t border-white/[0.08] px-3 py-2.5 flex items-center gap-2">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5 mb-0.5">
-                <p className="text-zinc-100 text-xs font-semibold truncate">
-                  {preset.name}
-                </p>
-                <LibraryBadge preset={preset} />
-              </div>
-              {preset.interactive ? (
-                <span className="text-[10px] text-zinc-500">Interactive</span>
-              ) : (
-                <span className="text-[10px] text-zinc-600 font-mono truncate block">
-                  {library.pkg}
-                </span>
-              )}
+              <p className="text-zinc-100 text-xs font-semibold truncate">
+                {preset.name}
+              </p>
+              <span className="text-[10px] text-zinc-500">Interactive</span>
             </div>
             <button
               onClick={(e) => {
@@ -136,6 +120,7 @@ export function PresetCard({
             </button>
           </div>
         </div>
+        )}
       </div>
 
       {showPreview && (
@@ -161,7 +146,6 @@ export function PresetCard({
             <GlassPreview preset={preset} />
 
             <div className="absolute top-3 left-3 right-3 flex flex-wrap items-center gap-2">
-              <LibraryBadge preset={preset} />
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-black/60 border border-white/[0.08] backdrop-blur-sm">
                 <code className="text-[11px] text-zinc-300 font-mono">{installCmd}</code>
                 <button
