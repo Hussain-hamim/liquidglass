@@ -18,10 +18,10 @@ export function GlassCategoryTabs({
             key={cat.id}
             type="button"
             onClick={() => onChange(cat.id)}
-            className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-medium transition-colors ${
+            className={`glass-tab shrink-0 px-3.5 py-1.5 rounded-full text-xs font-medium ${
               isActive
-                ? "bg-white text-zinc-950"
-                : "text-zinc-400 border border-white/[0.08] hover:text-zinc-200 hover:border-white/[0.14] bg-white/[0.03]"
+                ? "glass-tab-active bg-primary text-primary-foreground"
+                : "text-muted-foreground border border-border hover:text-foreground hover:border-border/80 bg-card/40"
             }`}
             aria-pressed={isActive}
           >

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { usePrefersReducedMotion } from "@/lib/usePrefersReducedMotion";
 import { GlassDropdownMenu } from "@/components/ref/GlassDropdownMenu";
 import {
   LiquidGlassDropdownMenu,
@@ -86,6 +87,8 @@ export function GlassNavDemo({
   const cycleTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userActive = useRef(false);
+  const reducedMotion = usePrefersReducedMotion();
+  const effectiveAutoCycle = autoCycle && !reducedMotion;
 
   const [openLabel, setOpenLabel] = useState<string | null>(
     autoCloseBetweenCycles ? null : "Product",
@@ -229,7 +232,7 @@ export function GlassNavDemo({
   };
 
   const scheduleResumeAuto = () => {
-    if (!autoCycle) return;
+    if (!effectiveAutoCycle) return;
     clearResumeTimer();
     resumeTimer.current = setTimeout(() => {
       userActive.current = false;
@@ -251,7 +254,7 @@ export function GlassNavDemo({
   };
 
   useEffect(() => {
-    if (!autoCycle) return;
+    if (!effectiveAutoCycle) return;
 
     cycleTimer.current = setInterval(() => {
       if (userActive.current) return;
@@ -263,7 +266,7 @@ export function GlassNavDemo({
       clearResumeTimer();
       clearCloseTimer();
     };
-  }, [autoCycle]);
+  }, [effectiveAutoCycle]);
 
   const openMenu = (label: string) => {
     clearCloseTimer();

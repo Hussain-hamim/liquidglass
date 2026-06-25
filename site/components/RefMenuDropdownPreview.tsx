@@ -12,7 +12,7 @@ export function RefMenuDropdownPreview({
   preset: GlassPreset;
   bg: string;
 }) {
-  const { ref, inView } = useInView("200px");
+  const { ref } = useInView("200px");
 
   return (
     <div ref={ref} className="relative w-full h-full">
@@ -21,7 +21,7 @@ export function RefMenuDropdownPreview({
         compact
         glassEngine="ybouane"
         glassConfig={{ ...MENU_GLASS_PRESETS.Product, ...(preset.config ?? {}) }}
-        autoCycle={inView}
+        autoCycle={false}
         autoCloseBetweenCycles
         className="rounded-none border-0 shadow-none"
       />

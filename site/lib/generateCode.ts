@@ -222,21 +222,21 @@ export function ${componentName}() {
 }`;
 }
 
-function ybouaneGlassCode(preset: GlassPreset): string {
+function ybouaneGlassCode(preset: GlassPreset, config: Record<string, unknown>): string {
   const componentName = toComponentName(preset.name) + "Glass";
   const label = preset.label ?? preset.name;
   const width = preset.width ?? 180;
   const height = preset.height ?? 100;
   const bg = preset.background ?? "/backgrounds/background-1.avif";
-  const configStr = JSON.stringify(preset.config, null, 4)
+  const configStr = JSON.stringify(config, null, 4)
     .split("\n")
     .map((line, i) => (i === 0 ? line : "    " + line))
     .join("\n");
 
-  const floatingNote = preset.config.floating
+  const floatingNote = config.floating
     ? "\n * - floating: true enables drag — glass element must stay a direct child of root."
     : "";
-  const buttonNote = preset.config.button
+  const buttonNote = config.button
     ? "\n * - button: true enables hover/press glass button styling."
     : "";
 
@@ -321,7 +321,111 @@ export function ${componentName}() {
 }`;
 }
 
-export function generateComponentCode(preset: GlassPreset): string {
+function notificationCode(preset: GlassPreset, config: Record<string, unknown>): string {
+  const componentName = toComponentName(preset.name) + "Glass";
+  const bg = preset.background ?? "/backgrounds/background-2.avif";
+  const width = preset.width ?? 300;
+  const height = preset.height ?? 76;
+  const configStr = JSON.stringify(config, null, 4)
+    .split("\n")
+    .map((line, i) => (i === 0 ? line : "    " + line))
+    .join("\n");
+
+  return `${ybouaneHeader(
+    preset.name,
+    "Stacked glass notification cards with icon, title, body, and timestamp."
+  )}
+
+"use client";
+import { useEffect, useRef } from "react";
+import { LiquidGlass } from "@ybouane/liquidglass";
+
+function NotificationIcon() {
+  return (
+    <div style={{ width: 40, height: 40, borderRadius: 10, background: "#0a84ff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden>
+        <rect x="2" y="4" width="11" height="11" rx="2.5" fill="white" fillOpacity="0.95" />
+        <rect x="7" y="2" width="11" height="11" rx="2.5" fill="white" fillOpacity="0.55" />
+      </svg>
+    </div>
+  );
+}
+
+export function ${componentName}() {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    const top = topRef.current;
+    const bottom = bottomRef.current;
+    if (!root || !top || !bottom) return;
+
+    let instance: Awaited<ReturnType<typeof LiquidGlass.init>> | undefined;
+    let cancelled = false;
+
+    (async () => {
+      top.dataset.config = JSON.stringify(${configStr});
+      bottom.dataset.config = JSON.stringify(${configStr});
+      instance = await LiquidGlass.init({ root, glassElements: [top, bottom] });
+      if (cancelled) instance?.destroy();
+    })();
+
+    return () => {
+      cancelled = true;
+      instance?.destroy();
+    };
+  }, []);
+
+  const cardStyle = {
+    position: "absolute" as const,
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: ${width},
+    height: ${height},
+    borderRadius: ${Number(config.cornerRadius ?? 22)},
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 14px",
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative", width: "100%", height: 360, overflow: "hidden" }}>
+      <img src="${bg}" alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+
+      <div ref={topRef} style={{ ...cardStyle, top: "calc(50% - ${height + 6}px)" }}>
+        <NotificationIcon />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, color: "#fff", fontSize: 13, fontWeight: 600 }}>UI-Layouts</p>
+          <p style={{ margin: "2px 0 0", color: "rgba(255,255,255,0.9)", fontSize: 11 }}>New components are available for you</p>
+          <p style={{ margin: "4px 0 0", color: "rgba(255,255,255,0.45)", fontSize: 10 }}>Liquid-Glass</p>
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, alignSelf: "flex-start" }}>12:34</span>
+      </div>
+
+      <div ref={bottomRef} style={{ ...cardStyle, top: "calc(50% + 6px)" }}>
+        <NotificationIcon />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, color: "#fff", fontSize: 15, fontWeight: 700, fontFamily: "ui-monospace, monospace", textTransform: "lowercase" }}>tools</p>
+          <p style={{ margin: "2px 0 0", color: "rgba(255,255,255,0.9)", fontSize: 11 }}>New components are available for you</p>
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, alignSelf: "flex-start" }}>12:34</span>
+      </div>
+    </div>
+  );
+}`;
+}
+
+export function generateComponentCode(
+  preset: GlassPreset,
+  configOverride?: Record<string, unknown>,
+): string {
+  const config = configOverride
+    ? { ...preset.config, ...configOverride }
+    : preset.config;
+
   if (preset.interactive === "switch" || preset.interactive === "toggle") {
     return refSwitchCode(preset.name);
   }
@@ -334,8 +438,11 @@ export function generateComponentCode(preset: GlassPreset): string {
   if (preset.interactive === "menu") {
     return refMenuCode(preset.name, preset.background ?? "/backgrounds/background-1.avif");
   }
+  if (preset.category === "notifications") {
+    return notificationCode(preset, config);
+  }
 
-  return ybouaneGlassCode(preset);
+  return ybouaneGlassCode(preset, config);
 }
 
 export function getInstallCommand(preset: GlassPreset): string {

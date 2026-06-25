@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type RefObject } from "react";
+import { usePrefersReducedMotion } from "@/lib/usePrefersReducedMotion";
 
 type LiquidGlassInstance = {
   destroy: () => void;
@@ -45,9 +46,10 @@ export function useFloatingGlassDrift({
   const animRef = useRef<number | null>(null);
   const startTimeRef = useRef(0);
   const phaseRef = useRef(Math.random() * Math.PI * 2);
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || reducedMotion) return;
 
     const root = rootRef.current;
     const glass = glassRef.current;
@@ -120,6 +122,10 @@ export function useFloatingGlassDrift({
       root.removeEventListener("pointerup", scheduleResume);
       root.removeEventListener("pointercancel", scheduleResume);
       root.removeEventListener("pointerleave", scheduleResume);
+      const g = glassRef.current;
+      if (g) {
+        g.style.transform = "";
+      }
     };
-  }, [enabled, rootRef, glassRef, instanceRef, width, height]);
+  }, [enabled, reducedMotion, rootRef, glassRef, instanceRef, width, height]);
 }

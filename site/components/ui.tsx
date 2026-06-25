@@ -5,7 +5,7 @@ export function Toast({ message, visible }: { message: string; visible: boolean 
     <div
       role="status"
       aria-live="polite"
-      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-full bg-zinc-900/90 border border-zinc-800 backdrop-blur-md text-zinc-100 text-sm font-medium shadow-lg transition-all duration-300 ${
+      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-full bg-card/95 border border-border backdrop-blur-md text-foreground text-sm font-medium shadow-lg transition-all duration-300 ${
         visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4 pointer-events-none"
       }`}
     >
@@ -24,7 +24,7 @@ export function SearchBar({
   return (
     <div className="relative">
       <svg
-        className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500"
+        className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -39,7 +39,7 @@ export function SearchBar({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label="Search glass patterns"
-        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-white/[0.08] bg-zinc-900/30 text-zinc-100 placeholder-zinc-600 text-sm focus:outline-none focus:border-white/[0.15] transition-colors"
+        className="w-full pl-11 pr-4 py-3 rounded-2xl border border-border bg-card/50 text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-ring transition-colors"
       />
     </div>
   );

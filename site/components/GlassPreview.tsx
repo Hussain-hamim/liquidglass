@@ -9,9 +9,28 @@ import {
   RefMediaBarPreview,
 } from "./RefControlPreviews";
 import { RefMenuDropdownPreview } from "./RefMenuDropdownPreview";
+import { RefNotificationPreview } from "./RefNotificationPreview";
 import { StaticGlassPreview } from "./StaticGlassPreview";
 
-export function GlassPreview({ preset }: { preset: GlassPreset }) {
+type ActionBarProps = {
+  onPreview: () => void;
+  onCopy: () => void;
+  mobileOpen: boolean;
+};
+
+export function GlassPreview({
+  preset,
+  actionBar,
+  configOverride,
+  previewMode = "card",
+  paused = false,
+}: {
+  preset: GlassPreset;
+  actionBar?: ActionBarProps;
+  configOverride?: Record<string, unknown>;
+  previewMode?: "card" | "modal";
+  paused?: boolean;
+}) {
   const bg = preset.background ?? "/backgrounds/background-1.avif";
 
   switch (preset.interactive) {
@@ -28,6 +47,25 @@ export function GlassPreview({ preset }: { preset: GlassPreset }) {
     case "menu":
       return <RefMenuDropdownPreview preset={preset} bg={bg} />;
     default:
-      return <StaticGlassPreview preset={preset} />;
+      if (preset.category === "notifications") {
+        return (
+          <RefNotificationPreview
+            preset={preset}
+            actionBar={actionBar}
+            configOverride={configOverride}
+            previewMode={previewMode}
+            paused={paused}
+          />
+        );
+      }
+      return (
+        <StaticGlassPreview
+          preset={preset}
+          actionBar={actionBar}
+          configOverride={configOverride}
+          previewMode={previewMode}
+          paused={paused}
+        />
+      );
   }
 }

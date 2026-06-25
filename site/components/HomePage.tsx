@@ -1,17 +1,13 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
-import { presets, CATEGORIES } from "@/lib/presets";
-import { SearchBar, Toast } from "@/components/ui";
+import { presets } from "@/lib/presets";
+import { Toast } from "@/components/ui";
 import { SiteHeader } from "@/components/SiteHeader";
-import { GlassCategoryTabs } from "@/components/GlassCategoryTabs";
+import { LibrarySection } from "@/components/LibrarySection";
 import { GITHUB_REPO_URL } from "@/lib/site-url";
-
-const PresetCard = dynamic(
-  () => import("@/components/PresetCard").then((m) => m.PresetCard),
-  { ssr: false }
-);
+import { usePrefersReducedMotion } from "@/lib/usePrefersReducedMotion";
 
 const HeroGlassDemo = dynamic(
   () => import("@/components/GlassNavDemo").then((m) => m.GlassNavDemo),
@@ -24,20 +20,8 @@ const HeroGlassDemo = dynamic(
 );
 
 export function HomePage() {
-  const [category, setCategory] = useState("all");
-  const [search, setSearch] = useState("");
   const [toast, setToast] = useState({ message: "", visible: false });
-
-  const filtered = useMemo(() => {
-    return presets.filter((p) => {
-      const matchCat = category === "all" || p.category === category;
-      const matchSearch =
-        !search ||
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.category.toLowerCase().includes(search.toLowerCase());
-      return matchCat && matchSearch;
-    });
-  }, [category, search]);
+  const reducedMotion = usePrefersReducedMotion();
 
   const showToast = (message: string) => {
     setToast({ message, visible: true });
@@ -45,7 +29,7 @@ export function HomePage() {
   };
 
   return (
-    <div className="min-h-screen w-full relative text-zinc-50">
+    <div className="min-h-screen w-full relative text-foreground glass-page-enter">
       <SiteHeader />
 
       {/* Hero */}
@@ -55,39 +39,39 @@ export function HomePage() {
           className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[500px]"
           style={{
             background:
-              "radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.12) 0%, rgba(99,102,241,0.04) 40%, transparent 70%)",
+              "radial-gradient(ellipse at 50% 0%, color-mix(in oklch, var(--primary) 14%, transparent) 0%, color-mix(in oklch, var(--chart-1) 6%, transparent) 40%, transparent 70%)",
           }}
         />
 
         <div className="relative max-w-5xl mx-auto px-6 pt-8 pb-10 sm:pt-10 sm:pb-14 text-center">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-white/[0.08] bg-white/[0.04] mb-6">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
-            </span>
-            <span className="text-xs font-medium text-zinc-400 tracking-wide">
-              {presets.length} glass effects ready to copy
-            </span>
-          </div>
-
           {/* Heading */}
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-5">
+          <h1
+            className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.1] mb-5 glass-reveal"
+            style={{ "--reveal-delay": "0ms" } as CSSProperties}
+          >
             <span className="text-white">Liquid Glass</span>
             <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-zinc-400 via-zinc-300 to-zinc-500">
+            <span
+              className="text-transparent bg-clip-text bg-gradient-to-r from-primary via-primary/80 to-chart-1"
+            >
               for the modern web
             </span>
           </h1>
 
           {/* Sub */}
-          <p className="text-base sm:text-lg text-zinc-500 leading-relaxed max-w-xl mx-auto mb-8">
+          <p
+            className="text-base sm:text-lg text-zinc-500 leading-relaxed max-w-xl mx-auto mb-8 glass-reveal"
+            style={{ "--reveal-delay": "80ms" } as CSSProperties}
+          >
             Browse, preview, and copy beautiful glass effects into your React project.
             Powered by WebGL — works everywhere.
           </p>
 
           {/* Glass demo — hero showcase */}
-          <div className="relative max-w-2xl mx-auto mb-10">
+          <div
+            className="relative max-w-2xl mx-auto mb-10 glass-reveal"
+            style={{ "--reveal-delay": "160ms" } as CSSProperties}
+          >
             {/* Glow behind demo */}
             <div
               className="absolute -inset-8 -z-10 rounded-[40px] opacity-60"
@@ -105,10 +89,13 @@ export function HomePage() {
           </div>
 
           {/* CTAs */}
-          <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
+          <div
+            className="flex flex-wrap items-center justify-center gap-3 glass-reveal"
+            style={{ "--reveal-delay": "240ms" } as CSSProperties}
+          >
             <a
               href="#library"
-              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-white text-zinc-950 text-sm font-semibold hover:bg-zinc-200 transition-colors"
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/85 transition-colors"
             >
               Browse Library
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -128,6 +115,22 @@ export function HomePage() {
             </a>
           </div>
 
+          {/* Badge */}
+          <div
+            className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-card/50 mt-4 glass-reveal"
+            style={{ "--reveal-delay": "320ms" } as CSSProperties}
+          >
+            <span className="relative flex h-2 w-2">
+              {!reducedMotion && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75 motion-reduce:animate-none" />
+              )}
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+            </span>
+            <span className="text-xs font-medium text-muted-foreground tracking-wide">
+              {presets.length} glass effects ready to copy
+            </span>
+          </div>
+
         </div>
 
         {/* Section divider */}
@@ -136,38 +139,33 @@ export function HomePage() {
 
       {/* Library */}
       <main id="library" className="max-w-6xl mx-auto px-6 py-12">
-        <div className="mb-8">
+        <div
+          className="mb-8 glass-reveal"
+          style={{ "--reveal-delay": "400ms" } as CSSProperties}
+        >
           <h2 className="text-xl sm:text-2xl font-bold text-zinc-50 mb-1 tracking-tight">Library</h2>
           <p className="text-zinc-500 text-sm">
             Hover to preview or copy. Controls &amp; media cards are interactive — click or drag.
           </p>
         </div>
 
-        <div className="mb-6">
-          <GlassCategoryTabs categories={CATEGORIES} active={category} onChange={setCategory} />
-        </div>
-
-        <div className="mb-6">
-          <SearchBar value={search} onChange={setSearch} />
-        </div>
-
-        <p className="text-sm text-zinc-500 mb-6">
-          {filtered.length} glass effect{filtered.length !== 1 ? "s" : ""}
-          {category !== "all" ? ` in ${CATEGORIES.find((c) => c.id === category)?.label}` : ""}
-        </p>
-
-        {filtered.length === 0 ? (
-          <div className="text-center py-20 text-zinc-600">No patterns found.</div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {filtered.map((preset) => (
-              <PresetCard key={preset.id} preset={preset} onCopy={showToast} />
-            ))}
-          </div>
-        )}
+        <Suspense
+          fallback={
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="aspect-square rounded-2xl bg-zinc-900/50 animate-pulse motion-reduce:animate-none" />
+              ))}
+            </div>
+          }
+        >
+          <LibrarySection onCopy={showToast} />
+        </Suspense>
       </main>
 
-      <footer className="border-t border-white/[0.06] py-8 text-center text-xs text-zinc-600">
+      <footer
+        className="border-t border-white/[0.06] py-8 text-center text-xs text-zinc-600 glass-reveal"
+        style={{ "--reveal-delay": "480ms" } as CSSProperties}
+      >
         LiquidGlass · MIT License
       </footer>
 
