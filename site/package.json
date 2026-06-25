@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "dev:clean": "rm -rf .next && next dev",
-    "build": "NEXT_DIST_DIR=.next-build next build",
-    "start": "NEXT_DIST_DIR=.next-build next start",
+    "build": "next build",
+    "build:isolated": "NEXT_DIST_DIR=.next-build next build",
+    "start": "next start",
+    "start:isolated": "NEXT_DIST_DIR=.next-build next start",
     "clean": "rm -rf .next .next-build"
   },
   "dependencies": {
